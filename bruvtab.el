@@ -160,33 +160,47 @@ Returns a list or alist (symbol keys); JSON false/null become nil."
 
 ;;; Native mediator backend --------------------------------------------------
 
-(defun bruvtab--port-open-p (port)
-  "Return non-nil if the mediator host accepts TCP connections on PORT."
-  (let ((proc (condition-case nil
-                  (make-network-process :name "bruvtab-probe"
-                                        :host bruvtab-mediator-host
-                                        :service port
-                                        :family 'ipv4
-                                        :nowait nil
-                                        :noquery t)
-                (error nil))))
-    (when proc
-      (delete-process proc)
-      t)))
+(defcustom bruvtab-probe-timeout 0.5
+  "Timeout in seconds for probing one mediator port.
+Non-answering ports are skipped after this long instead of blocking for the
+operating system's TCP connect timeout."
+  :type 'number)
 
 (defun bruvtab--native-clients ()
   "Return a list of (PREFIX HOST PORT) for live mediator ports.
 PREFIX is assigned by port position (4625→\"a.\", 4626→\"b.\", ...),
-matching the bruvtab CLI's positional letter assignment."
-  (let (result)
+matching the bruvtab CLI's positional letter assignment.  Probes run
+concurrently and are bounded by `bruvtab-probe-timeout'."
+  (let ((probes nil)
+        (result nil))
     (cl-loop for port from bruvtab-mediator-port-min
              below bruvtab-mediator-port-max
              for index from 0
-             when (bruvtab--port-open-p port)
-             do (push (list (concat (string (+ ?a index)) ".")
-                            bruvtab-mediator-host
-                            port)
-                      result))
+             for proc = (condition-case nil
+                            (make-network-process
+                             :name "bruvtab-probe"
+                             :host bruvtab-mediator-host
+                             :service port
+                             :family 'ipv4
+                             :nowait t
+                             :noquery t)
+                          (error nil))
+             when proc
+             do (push (list index proc) probes))
+    (let ((deadline (+ (float-time) bruvtab-probe-timeout)))
+      (while (and (cl-some (lambda (p) (eq (process-status (cadr p)) 'connect))
+                           probes)
+                  (< (float-time) deadline))
+        (accept-process-output nil 0.001)))
+    (dolist (pair probes)
+      (let ((index (car pair))
+            (proc (cadr pair)))
+        (when (eq (process-status proc) 'open)
+          (push (list (concat (string (+ ?a index)) ".")
+                      bruvtab-mediator-host
+                      (+ bruvtab-mediator-port-min index))
+                result))
+        (delete-process proc)))
     (nreverse result)))
 
 (defun bruvtab--native-fetch (host port path)
@@ -214,7 +228,7 @@ Returns the response body as a string, or signals on error/timeout."
               (deadline (+ (float-time) bruvtab-mediator-timeout)))
           (process-send-string proc request)
           (while (and (not finished) (< (float-time) deadline))
-            (accept-process-output proc 0.05))
+            (accept-process-output proc 0.001))
           (unless finished
             (error "bruvtab: timeout fetching %s:%d%s" host port path))
           (let ((raw (mapconcat #'identity (nreverse chunks) "")))
@@ -550,6 +564,19 @@ BUFFER should be an `exwm-mode' buffer showing a Firefox window."
                           (or (bruvtab--buffer-title buffer) "-")
                           (or url "-"))))))
     (display-buffer (current-buffer))))
+
+(defun bruvtab-diagnose ()
+  "Print timings for the native probe and fetch stages."
+  (interactive)
+  (let ((probe-time (car (benchmark-run 1 (bruvtab--native-clients)))))
+    (message "native probe: %.4fs" probe-time))
+  (dolist (client (bruvtab--native-clients))
+    (let* ((host (nth 1 client))
+           (port (nth 2 client))
+           (tabs-time (car (benchmark-run 1 (bruvtab--native-fetch host port "/list_tabs"))))
+           (active-time (car (benchmark-run 1 (bruvtab--native-fetch host port "/get_active_tabs")))))
+      (message "fetch %s:%d  list_tabs %.4fs  active %.4fs"
+               host port tabs-time active-time))))
 
 (provide 'bruvtab)
 ;;; bruvtab.el ends here
