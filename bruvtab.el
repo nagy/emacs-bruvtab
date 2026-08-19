@@ -205,9 +205,9 @@ concurrently and are bounded by `bruvtab-probe-timeout'."
 
 (defun bruvtab--native-fetch (host port path)
   "Fetch PATH from the mediator over a raw HTTP/1.0 connection.
-Returns the response body as a string, or signals on error/timeout."
+Reads exactly Content-Length bytes, so completion is data-driven instead of
+relying on EOF/sentinel delivery (which can lag in an interactive session)."
   (let* ((chunks nil)
-         (finished nil)
          (proc (condition-case nil
                    (make-network-process
                     :name "bruvtab-http"
@@ -217,31 +217,46 @@ Returns the response body as a string, or signals on error/timeout."
                     :nowait nil
                     :coding 'binary
                     :noquery t
-                    :filter (lambda (_p chunk) (push chunk chunks))
-                    :sentinel (lambda (_p _msg) (setq finished t)))
+                    :filter (lambda (_p chunk) (push chunk chunks)))
                  (error nil))))
     (unless proc
       (error "bruvtab: cannot connect to %s:%d" host port))
     (unwind-protect
         (let ((request (format "GET %s HTTP/1.0\r\nHost: %s:%d\r\n\r\n"
                                path host port))
-              (deadline (+ (float-time) bruvtab-mediator-timeout)))
+              (deadline (+ (float-time) bruvtab-mediator-timeout))
+              (raw "")
+              (header-end nil)
+              (content-length nil))
           (process-send-string proc request)
-          (while (and (not finished) (< (float-time) deadline))
-            (accept-process-output proc 0.001))
-          (unless finished
-            (error "bruvtab: timeout fetching %s:%d%s" host port path))
-          (let ((raw (mapconcat #'identity (nreverse chunks) "")))
-            (unless (string-match "\\`HTTP/1\\.[01] 200 " raw)
-              (error "bruvtab: bad HTTP status from %s:%d%s" host port path))
-            (unless (string-match "\r?\n\r?\n" raw)
-              (error "bruvtab: malformed HTTP response from %s:%d%s" host port path))
-            (let ((body (decode-coding-string (substring raw (match-end 0))
-                                              'utf-8)))
-              (if (equal body "<ERROR>")
-                  (error "bruvtab: mediator returned <ERROR> for %s:%d%s"
-                         host port path)
-                body))))
+          ;; Wait for the header terminator, then parse Content-Length.
+          (while (and (null content-length) (< (float-time) deadline))
+            (setq raw (mapconcat #'identity (reverse chunks) ""))
+            (when (string-match "\r?\n\r?\n" raw)
+              (setq header-end (match-end 0))
+              (let ((header (substring raw 0 (match-beginning 0))))
+                (unless (string-match "\\`HTTP/1\\.[01] 200 " header)
+                  (error "bruvtab: bad HTTP status from %s:%d%s" host port path))
+                (when (string-match "Content-Length:[ \t]*\\([0-9]+\\)" header)
+                  (setq content-length (string-to-number (match-string 1 header))))))
+            (unless content-length
+              (accept-process-output proc 0.001)))
+          (unless content-length
+            (error "bruvtab: timeout waiting for headers from %s:%d%s" host port path))
+          ;; Wait until the declared body length has arrived.
+          (while (and (< (length raw) (+ header-end content-length))
+                      (< (float-time) deadline))
+            (accept-process-output proc 0.001)
+            (setq raw (mapconcat #'identity (reverse chunks) "")))
+          (unless (>= (length raw) (+ header-end content-length))
+            (error "bruvtab: timeout reading body from %s:%d%s" host port path))
+          (let ((body (decode-coding-string
+                       (substring raw header-end (+ header-end content-length))
+                       'utf-8)))
+            (if (equal body "<ERROR>")
+                (error "bruvtab: mediator returned <ERROR> for %s:%d%s"
+                       host port path)
+              body)))
       (when (process-live-p proc) (delete-process proc)))))
 
 (defun bruvtab--native-fetch-all (&optional want-tabs want-active)

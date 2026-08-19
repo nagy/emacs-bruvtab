@@ -133,8 +133,9 @@ HTTP/1.0 client (`bruvtab--native-fetch`) that GETs `/list_tabs` +
   (`bruvtab windows --json`), not before.
 - Raw network process: use `:filter` + `:sentinel`, never the process
   buffer — the default buffer gets "connection broken by remote peer" text
-  inserted at EOF. Accumulate filter chunks and parse the HTTP header/body
-  split yourself.
+  inserted at EOF. Prefer reading a declared `Content-Length` byte count
+  (data-driven) over waiting for the EOF/sentinel, which can lag seconds in
+  an interactive session.
 - `make-network-process` with `:nowait nil` (blocking connect) has **no
   timeout**; a port that drops SYNs stalls Emacs for the OS connect timeout.
   Probes therefore use `:nowait t` + a bounded wait (`bruvtab-probe-timeout`),
