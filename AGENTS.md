@@ -73,9 +73,11 @@ Resolution order in `bruvtab-window-id-for-buffer`: title match first
 (authoritative), then `bruvtab-window-id-map` fallback.
 
 Snapshot threading: `bruvtab--snapshot` fetches `tabs` + `active` exactly
-once; buffer/window helpers take an optional SNAPSHOT plist (`:tabs`,
-`:active`, `:tabs-by-id`, `:title->id`). `bruvtab-url-for-buffer` therefore
-costs exactly two subprocess calls, not four.
+once and probes the mediator ports a single time; buffer/window helpers
+take an optional SNAPSHOT plist (`:tabs`, `:active`, `:tabs-by-id`,
+`:title->id`). In native mode it uses `bruvtab--native-snapshot` (one probe
+pass + two raw HTTP GETs); in cli mode it uses `bruvtab-tabs` +
+`bruvtab-active` (two subprocess calls).
 
 ## Fallback tracker semantics
 
@@ -113,9 +115,10 @@ So each CLI `--json` command costs HTTP GETs, not just one:
 - `tabs --json`    = 3 GETs (`/list_tabs` + audible + muted queries) — the
   `playing`/`muted` fields are the extra two.
 
-Implication: a native Elisp/Rust client only needs two plain HTTP GETs for
-the URL lookup (`/list_tabs` + `/get_active_tabs`); `playing`/`muted` are
-not needed here. This would remove Python startup entirely.
+Implemented here as `bruvtab-backend` = `native` (default): a raw
+HTTP/1.0 client (`bruvtab--native-fetch`) that GETs `/list_tabs` +
+`/get_active_tabs` and skips `playing`/`muted`. `cli` shells out to
+`bruvtab-program` as fallback.
 
 ## Implementation gotchas (do not regress)
 
@@ -128,11 +131,17 @@ not needed here. This would remove Python startup entirely.
 - `hash-table-values`/`hash-table-keys` need `(require 'subr-x)`.
 - `bruvtab` writes `--json` **after** the subcommand
   (`bruvtab windows --json`), not before.
+- Raw network process: use `:filter` + `:sentinel`, never the process
+  buffer — the default buffer gets "connection broken by remote peer" text
+  inserted at EOF. Accumulate filter chunks and parse the HTTP header/body
+  split yourself.
 
 ## Testing
 
-This sandbox has no `$DISPLAY` and no running mediator, so `bruvtab` cannot
-reach Firefox here. The pure/mapping logic is validated by mocking
-`bruvtab--json` and `bruvtab--firefox-x11-windows` with the transcript's own
-JSON. A real run on the target machine (`M-x bruvtab-debug`) is still the
-integration check.
+The native backend is exercised against the live mediator on
+`127.0.0.1:4625` (present in this environment): `bruvtab--native-clients`,
+`bruvtab-tabs`, `bruvtab-active`, `bruvtab-windows` and
+`bruvtab-url-for-buffer` are all verified against real tab data. The CLI
+backend and the tracker are validated by mocking `bruvtab--json` and
+`bruvtab--firefox-x11-windows` (there is no `$DISPLAY`/EXWM here, so the X11
+side is mocked either way).

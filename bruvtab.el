@@ -24,9 +24,16 @@
 ;; tracker is also provided as a fallback for cases where titles do not
 ;; match (e.g. windows whose title is just "Mozilla Firefox").
 ;;
-;; Each subprocess invocation of bruvtab is expensive (Python startup), so a
-;; lookup fetches `tabs' and `active' exactly once and threads the resulting
-;; snapshot through every helper via optional SNAPSHOT arguments.
+;; Backends: `bruvtab-backend' defaults to `native', which talks HTTP
+;; directly to the running bruvtab mediator over a raw socket (no Python
+;; startup, no url.el overhead).  Set it to `cli' to shell out to
+;; `bruvtab-program' instead.  The native backend skips the `playing'/`muted'
+;; tab fields (they are not needed for URL lookup and cost extra mediator
+;; round-trips).
+;;
+;; A lookup fetches `tabs' and `active' exactly once, probing the mediator
+;; ports a single time, and threads the resulting snapshot through every
+;; helper via optional SNAPSHOT arguments.
 
 ;; Entry points to try:
 ;;
@@ -59,12 +66,34 @@
   :group 'web)
 
 (defcustom bruvtab-program "bruvtab"
-  "Name or path of the bruvtab executable."
+  "Name or path of the bruvtab executable (used by the `cli' backend)."
   :type 'string)
 
 (defcustom bruvtab-json-flag "--json"
   "Command-line flag that makes bruvtab emit JSON."
   :type 'string)
+
+(defcustom bruvtab-backend 'native
+  "How to query bruvtab.
+`native' talks HTTP directly to the running bruvtab mediator (fast, no
+Python startup).  `cli' shells out to `bruvtab-program'."
+  :type '(choice (const native) (const cli)))
+
+(defcustom bruvtab-mediator-host "127.0.0.1"
+  "Host the bruvtab mediator HTTP server listens on."
+  :type 'string)
+
+(defcustom bruvtab-mediator-port-min 4625
+  "First port to probe for the bruvtab mediator."
+  :type 'integer)
+
+(defcustom bruvtab-mediator-port-max 4635
+  "Exclusive upper bound of ports to probe (mirrors the CLI range)."
+  :type 'integer)
+
+(defcustom bruvtab-mediator-timeout 2.0
+  "Timeout in seconds for native mediator HTTP requests."
+  :type 'number)
 
 (defcustom bruvtab-firefox-class-regexp
   "\\`\\(?:Navigator\\|firefox\\|Firefox\\|firefox-esr\\|firefox-developer-edition\\|nightly\\|aurora\\|iceweasel\\|librewolf\\|waterfox\\)\\'"
@@ -103,7 +132,7 @@ X11 window title before comparing it with a bruvtab tab title."
 Such titles (e.g. \"Mozilla Firefox\") normalize to the empty string."
   :type 'regexp)
 
-;;; Process + JSON -----------------------------------------------------------
+;;; CLI process + JSON -------------------------------------------------------
 
 (defun bruvtab--call (&rest args)
   "Run `bruvtab-program' with ARGS and return stdout as a trimmed string.
@@ -129,26 +158,152 @@ Returns a list or alist (symbol keys); JSON false/null become nil."
                          :null-object nil
                          :false-object nil))))
 
+;;; Native mediator backend --------------------------------------------------
+
+(defun bruvtab--port-open-p (port)
+  "Return non-nil if the mediator host accepts TCP connections on PORT."
+  (let ((proc (condition-case nil
+                  (make-network-process :name "bruvtab-probe"
+                                        :host bruvtab-mediator-host
+                                        :service port
+                                        :family 'ipv4
+                                        :nowait nil
+                                        :noquery t)
+                (error nil))))
+    (when proc
+      (delete-process proc)
+      t)))
+
+(defun bruvtab--native-clients ()
+  "Return a list of (PREFIX HOST PORT) for live mediator ports.
+PREFIX is assigned by port position (4625→\"a.\", 4626→\"b.\", ...),
+matching the bruvtab CLI's positional letter assignment."
+  (let (result)
+    (cl-loop for port from bruvtab-mediator-port-min
+             below bruvtab-mediator-port-max
+             for index from 0
+             when (bruvtab--port-open-p port)
+             do (push (list (concat (string (+ ?a index)) ".")
+                            bruvtab-mediator-host
+                            port)
+                      result))
+    (nreverse result)))
+
+(defun bruvtab--native-fetch (host port path)
+  "Fetch PATH from the mediator over a raw HTTP/1.0 connection.
+Returns the response body as a string, or signals on error/timeout."
+  (let* ((chunks nil)
+         (finished nil)
+         (proc (condition-case nil
+                   (make-network-process
+                    :name "bruvtab-http"
+                    :host host
+                    :service port
+                    :family 'ipv4
+                    :nowait nil
+                    :coding 'binary
+                    :noquery t
+                    :filter (lambda (_p chunk) (push chunk chunks))
+                    :sentinel (lambda (_p _msg) (setq finished t)))
+                 (error nil))))
+    (unless proc
+      (error "bruvtab: cannot connect to %s:%d" host port))
+    (unwind-protect
+        (let ((request (format "GET %s HTTP/1.0\r\nHost: %s:%d\r\n\r\n"
+                               path host port))
+              (deadline (+ (float-time) bruvtab-mediator-timeout)))
+          (process-send-string proc request)
+          (while (and (not finished) (< (float-time) deadline))
+            (accept-process-output proc 0.05))
+          (unless finished
+            (error "bruvtab: timeout fetching %s:%d%s" host port path))
+          (let ((raw (mapconcat #'identity (nreverse chunks) "")))
+            (unless (string-match "\\`HTTP/1\\.[01] 200 " raw)
+              (error "bruvtab: bad HTTP status from %s:%d%s" host port path))
+            (unless (string-match "\r?\n\r?\n" raw)
+              (error "bruvtab: malformed HTTP response from %s:%d%s" host port path))
+            (let ((body (decode-coding-string (substring raw (match-end 0))
+                                              'utf-8)))
+              (if (equal body "<ERROR>")
+                  (error "bruvtab: mediator returned <ERROR> for %s:%d%s"
+                         host port path)
+                body))))
+      (when (process-live-p proc) (delete-process proc)))))
+
+(defun bruvtab--native-fetch-all (&optional want-tabs want-active)
+  "Fetch native tabs and/or active tabs in one pass over clients.
+Returns a list (TABS ACTIVE); unrequested elements are nil."
+  (let ((tabs nil)
+        (active nil))
+    (dolist (client (bruvtab--native-clients))
+      (let* ((prefix (nth 0 client))
+             (host (nth 1 client))
+             (port (nth 2 client)))
+        (when want-tabs
+          (dolist (line (split-string
+                         (bruvtab--native-fetch host port "/list_tabs") "\n" t))
+            (let ((parts (split-string line "\t")))
+              (when (>= (length parts) 3)
+                (push (list (cons 'id (concat prefix (nth 0 parts)))
+                            (cons 'title (nth 1 parts))
+                            (cons 'url (nth 2 parts))
+                            (cons 'playing nil)
+                            (cons 'muted nil))
+                      tabs)))))
+        (when want-active
+          (dolist (win-tab (split-string
+                            (bruvtab--native-fetch host port "/get_active_tabs")
+                            "," t))
+            (let* ((tab-id (concat prefix win-tab))
+                   (window-id (bruvtab--window-id-of tab-id)))
+              (push (cons window-id tab-id) active))))))
+    (list (nreverse tabs) (nreverse active))))
+
+(defun bruvtab--native-tabs ()
+  "Return tab alists via the native backend.
+`playing'/`muted' are nil: they are not queried (extra mediator calls)."
+  (car (bruvtab--native-fetch-all t nil)))
+
+(defun bruvtab--native-active ()
+  "Return ((WINDOW-ID . TAB-ID) ...) via the native backend."
+  (cadr (bruvtab--native-fetch-all nil t)))
+
+(defun bruvtab--native-snapshot ()
+  "Fetch native tabs and active tabs in one pass over clients.
+Returns a plist with keys `:tabs' and `:active'."
+  (let ((r (bruvtab--native-fetch-all t t)))
+    (list :tabs (car r) :active (cadr r))))
+
 ;;; bruvtab queries ----------------------------------------------------------
 
 (defun bruvtab-windows ()
-  "Return bruvtab windows as an alist of (WINDOW-ID . TAB-COUNT)."
-  (mapcar (lambda (w)
-            (cons (cdr (assq 'window w))
-                  (cdr (assq 'tabs w))))
-          (bruvtab--json "windows")))
+  "Return bruvtab windows as an alist of (WINDOW-ID . TAB-COUNT).
+Derived from the tab list, matching how the bruvtab CLI computes `windows'."
+  (let ((counts (make-hash-table :test 'equal))
+        (order nil))
+    (dolist (tab (bruvtab-tabs))
+      (let ((wid (bruvtab--window-id-of (cdr (assq 'id tab)))))
+        (unless (gethash wid counts)
+          (push wid order))
+        (puthash wid (1+ (gethash wid counts 0)) counts)))
+    (mapcar (lambda (wid) (cons wid (gethash wid counts)))
+            (nreverse order))))
 
 (defun bruvtab-tabs ()
   "Return bruvtab tabs as a list of alists.
 Each alist has keys `id', `title', `url', `playing' and `muted'."
-  (bruvtab--json "tabs"))
+  (if (eq bruvtab-backend 'native)
+      (bruvtab--native-tabs)
+    (bruvtab--json "tabs")))
 
 (defun bruvtab-active ()
   "Return bruvtab active tabs as an alist of (WINDOW-ID . TAB-ID)."
-  (mapcar (lambda (a)
-            (let ((tab-id (cdr (assq 'id a))))
-              (cons (bruvtab--window-id-of tab-id) tab-id)))
-          (bruvtab--json "active")))
+  (if (eq bruvtab-backend 'native)
+      (bruvtab--native-active)
+    (mapcar (lambda (a)
+              (let ((tab-id (cdr (assq 'id a))))
+                (cons (bruvtab--window-id-of tab-id) tab-id)))
+            (bruvtab--json "active"))))
 
 (defun bruvtab--window-id-of (id)
   "Return the window-id part of bruvtab ID (\"a.1\" from \"a.1.2\").
@@ -166,6 +321,15 @@ TABS defaults to the result of `bruvtab-tabs'."
   (let ((h (make-hash-table :test 'equal)))
     (dolist (tab (or tabs (bruvtab-tabs)) h)
       (puthash (cdr (assq 'id tab)) tab h))))
+
+(defun bruvtab--window-ids-from-tabs (tabs)
+  "Return unique window ids (e.g. \"a.1\") from TABS, preserving order."
+  (let (ids)
+    (dolist (tab tabs)
+      (let ((wid (bruvtab--window-id-of (cdr (assq 'id tab)))))
+        (unless (member wid ids)
+          (push wid ids))))
+    (nreverse ids)))
 
 (defun bruvtab-active-tab-for-window (window-id &optional snapshot)
   "Return the active tab alist for WINDOW-ID (e.g. \"a.1\"), or nil.
@@ -234,8 +398,11 @@ Returns the page-title portion used for matching bruvtab tab titles."
 (defun bruvtab--snapshot ()
   "Fetch bruvtab tabs and active tabs once and derive lookup structures.
 Returns a plist with keys `:tabs', `:active', `:tabs-by-id' and `:title->id'."
-  (let* ((tabs (bruvtab-tabs))
-         (active (bruvtab-active))
+  (let* ((data (if (eq bruvtab-backend 'native)
+                   (bruvtab--native-snapshot)
+                 (list :tabs (bruvtab-tabs) :active (bruvtab-active))))
+         (tabs (plist-get data :tabs))
+         (active (plist-get data :active))
          (tabs-by-id (bruvtab--tabs-by-id tabs))
          (title->id (bruvtab--active-window-title->id active tabs-by-id)))
     (list :tabs tabs :active active
@@ -282,8 +449,8 @@ and one bruvtab window remain unassigned, pairs them.  Ambiguous cases are
 left unassigned."
   (let* ((x11-windows (bruvtab--firefox-x11-windows))
          (x11-ids (mapcar #'car x11-windows))
-         (bw-ids (mapcar #'car (bruvtab-windows)))
          (snapshot (bruvtab--snapshot))
+         (bw-ids (bruvtab--window-ids-from-tabs (plist-get snapshot :tabs)))
          (title->id (plist-get snapshot :title->id))
          (new-map (make-hash-table)))
     (cl-labels ((x11-taken-p (x) (gethash x new-map))
