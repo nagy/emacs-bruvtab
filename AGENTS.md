@@ -72,6 +72,11 @@ Commands: `bruvtab-show-url`, `bruvtab-debug`.
 Resolution order in `bruvtab-window-id-for-buffer`: title match first
 (authoritative), then `bruvtab-window-id-map` fallback.
 
+Snapshot threading: `bruvtab--snapshot` fetches `tabs` + `active` exactly
+once; buffer/window helpers take an optional SNAPSHOT plist (`:tabs`,
+`:active`, `:tabs-by-id`, `:title->id`). `bruvtab-url-for-buffer` therefore
+costs exactly two subprocess calls, not four.
+
 ## Fallback tracker semantics
 
 `bruvtab-update-window-id-map` rebuilds `bruvtab-window-id-map`
@@ -82,6 +87,35 @@ Resolution order in `bruvtab-window-id-for-buffer`: title match first
 3. only when exactly **one** X11 window and **one** bruvtab window remain
    unassigned, pair them — otherwise leave unassigned (the two-windows-
    opened-at-once ambiguity).
+
+## bruvtab's actual transport (for a native implementation)
+
+The Python CLI is not talking to a "native host socket". Two hops:
+
+1. **Firefox ↔ mediator** (native messaging): stdio, not a network socket.
+   Framing is a 4-byte native-endian (`struct 'I'`) length prefix followed
+   by UTF-8 JSON. Commands are JSON objects such as `{"name":"list_tabs"}`,
+   `{"name":"get_active_tabs"}`, `{"name":"query_tabs","query_info":{...}}`.
+2. **Mediator ↔ bruvtab CLI**: plain HTTP on `127.0.0.1:4625..4635`
+   (`DEFAULT_MIN_HTTP_PORT=4625`, `max=min+10`). The mediator is a Flask
+   app. Relevant GET endpoints:
+   - `/list_tabs` → newline-joined `window_id.tab_id\tTitle\tURL` lines
+     (no prefix; the CLI prepends `a.`).
+   - `/get_active_tabs` → comma-separated `window_id.tab_id` (e.g.
+     `1.2,259.42`), CLI splits and prefixes.
+   - `/query_tabs/{urlencoded-json}` → same line format, filtered by
+     `browser.tabs.query`; used for `{"audible":true}` and `{"muted":true}`.
+
+So each CLI `--json` command costs HTTP GETs, not just one:
+
+- `windows --json` = 1 GET (`/list_tabs`, grouped by window id).
+- `active --json`  = 1 GET (`/get_active_tabs`).
+- `tabs --json`    = 3 GETs (`/list_tabs` + audible + muted queries) — the
+  `playing`/`muted` fields are the extra two.
+
+Implication: a native Elisp/Rust client only needs two plain HTTP GETs for
+the URL lookup (`/list_tabs` + `/get_active_tabs`); `playing`/`muted` are
+not needed here. This would remove Python startup entirely.
 
 ## Implementation gotchas (do not regress)
 

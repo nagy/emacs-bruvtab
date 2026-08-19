@@ -23,6 +23,10 @@
 ;; works on demand, so no background process is required.  A background
 ;; tracker is also provided as a fallback for cases where titles do not
 ;; match (e.g. windows whose title is just "Mozilla Firefox").
+;;
+;; Each subprocess invocation of bruvtab is expensive (Python startup), so a
+;; lookup fetches `tabs' and `active' exactly once and threads the resulting
+;; snapshot through every helper via optional SNAPSHOT arguments.
 
 ;; Entry points to try:
 ;;
@@ -156,23 +160,26 @@ id such as \"a.1\" is returned unchanged."
       (match-string 1 id)
     id))
 
-(defun bruvtab--tabs-by-id ()
-  "Return a hash table mapping tab id to tab alist."
+(defun bruvtab--tabs-by-id (&optional tabs)
+  "Return a hash table mapping tab id to tab alist.
+TABS defaults to the result of `bruvtab-tabs'."
   (let ((h (make-hash-table :test 'equal)))
-    (dolist (tab (bruvtab-tabs) h)
+    (dolist (tab (or tabs (bruvtab-tabs)) h)
       (puthash (cdr (assq 'id tab)) tab h))))
 
-(defun bruvtab-active-tab-for-window (window-id)
-  "Return the active tab alist for WINDOW-ID (e.g. \"a.1\"), or nil."
-  (when-let* ((active (assoc window-id (bruvtab-active))))
-    (let ((tab-id (cdr active)))
-      (cl-find tab-id (bruvtab-tabs)
-               :key (lambda (tab) (cdr (assq 'id tab)))
-               :test #'equal))))
+(defun bruvtab-active-tab-for-window (window-id &optional snapshot)
+  "Return the active tab alist for WINDOW-ID (e.g. \"a.1\"), or nil.
+SNAPSHOT, when given, is a `bruvtab--snapshot' plist and avoids refetching."
+  (let ((snapshot (or snapshot (bruvtab--snapshot))))
+    (when-let* ((active (assoc window-id (plist-get snapshot :active))))
+      (let ((tab-id (cdr active)))
+        (cl-find tab-id (plist-get snapshot :tabs)
+                 :key (lambda (tab) (cdr (assq 'id tab)))
+                 :test #'equal)))))
 
-(defun bruvtab-url-for-window (window-id)
+(defun bruvtab-url-for-window (window-id &optional snapshot)
   "Return the URL of the active tab in WINDOW-ID, or nil."
-  (when-let* ((tab (bruvtab-active-tab-for-window window-id)))
+  (when-let* ((tab (bruvtab-active-tab-for-window window-id snapshot)))
     (cdr (assq 'url tab))))
 
 ;;; Title normalization ------------------------------------------------------
@@ -224,23 +231,35 @@ Returns the page-title portion used for matching bruvtab tab titles."
 
 ;;; X11 <-> bruvtab window-id mapping ----------------------------------------
 
-(defun bruvtab--active-window-title->id ()
-  "Return a hash table mapping normalized active-tab title -> window id."
-  (let* ((tabs (bruvtab--tabs-by-id))
+(defun bruvtab--snapshot ()
+  "Fetch bruvtab tabs and active tabs once and derive lookup structures.
+Returns a plist with keys `:tabs', `:active', `:tabs-by-id' and `:title->id'."
+  (let* ((tabs (bruvtab-tabs))
+         (active (bruvtab-active))
+         (tabs-by-id (bruvtab--tabs-by-id tabs))
+         (title->id (bruvtab--active-window-title->id active tabs-by-id)))
+    (list :tabs tabs :active active
+          :tabs-by-id tabs-by-id :title->id title->id)))
+
+(defun bruvtab--active-window-title->id (&optional active tabs-by-id)
+  "Return a hash table mapping normalized active-tab title -> window id.
+ACTIVE and TABS-BY-ID may be supplied to avoid refetching."
+  (let* ((tabs-by-id (or tabs-by-id (bruvtab--tabs-by-id)))
          (result (make-hash-table :test 'equal)))
-    (dolist (active (bruvtab-active) result)
-      (let* ((window-id (car active))
-             (tab (gethash (cdr active) tabs)))
+    (dolist (a (or active (bruvtab-active)) result)
+      (let* ((window-id (car a))
+             (tab (gethash (cdr a) tabs-by-id)))
         (when tab
           (let ((title (bruvtab--normalize-title (cdr (assq 'title tab)))))
             (when (and (stringp title)
                        (not (gethash title result)))
               (puthash title window-id result))))))))
 
-(defun bruvtab--window-id-by-title (buffer &optional title->id)
+(defun bruvtab--window-id-by-title (buffer &optional snapshot)
   "Return the bruvtab window id for BUFFER by matching its title."
   (when-let* ((title (bruvtab--buffer-title buffer)))
-    (gethash title (or title->id (bruvtab--active-window-title->id)))))
+    (let ((snapshot (or snapshot (bruvtab--snapshot))))
+      (gethash title (plist-get snapshot :title->id)))))
 
 ;; Background window-id map (fallback when titles do not match).
 
@@ -264,7 +283,8 @@ left unassigned."
   (let* ((x11-windows (bruvtab--firefox-x11-windows))
          (x11-ids (mapcar #'car x11-windows))
          (bw-ids (mapcar #'car (bruvtab-windows)))
-         (title->id (bruvtab--active-window-title->id))
+         (snapshot (bruvtab--snapshot))
+         (title->id (plist-get snapshot :title->id))
          (new-map (make-hash-table)))
     (cl-labels ((x11-taken-p (x) (gethash x new-map))
                 (bw-taken-p (b) (member b (hash-table-values new-map)))
@@ -313,23 +333,25 @@ left unassigned."
 
 ;;; Buffer-oriented entry points ---------------------------------------------
 
-(defun bruvtab-window-id-for-buffer (buffer)
+(defun bruvtab-window-id-for-buffer (buffer &optional snapshot)
   "Return the bruvtab window id (e.g. \"a.1\") for EXWM BUFFER, or nil."
   (when (bruvtab-firefox-buffer-p buffer)
     (let ((x11-id (bruvtab--x11-id buffer)))
-      (or (bruvtab--window-id-by-title buffer)
+      (or (bruvtab--window-id-by-title buffer snapshot)
           (and x11-id (gethash x11-id bruvtab-window-id-map))))))
 
-(defun bruvtab-tab-for-buffer (buffer)
+(defun bruvtab-tab-for-buffer (buffer &optional snapshot)
   "Return the active tab alist for EXWM BUFFER, or nil."
-  (when-let* ((window-id (bruvtab-window-id-for-buffer buffer)))
-    (bruvtab-active-tab-for-window window-id)))
+  (let ((snapshot (or snapshot (bruvtab--snapshot))))
+    (when-let* ((window-id (bruvtab-window-id-for-buffer buffer snapshot)))
+      (bruvtab-active-tab-for-window window-id snapshot))))
 
 (defun bruvtab-url-for-buffer (buffer)
   "Return the URL currently displayed in EXWM BUFFER, or nil.
 BUFFER should be an `exwm-mode' buffer showing a Firefox window."
-  (when-let* ((tab (bruvtab-tab-for-buffer buffer)))
-    (cdr (assq 'url tab))))
+  (let ((snapshot (bruvtab--snapshot)))
+    (when-let* ((tab (bruvtab-tab-for-buffer buffer snapshot)))
+      (cdr (assq 'url tab)))))
 
 ;;; Commands -----------------------------------------------------------------
 
