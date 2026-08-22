@@ -2,7 +2,8 @@
 
 Glue between EXWM X11 windows and the `bruvtab`/`brotab` `--json` commands.
 Goal: given an EXWM buffer that is a Firefox window, return the URL of its
-active tab. The only source file is `bruvtab.el`.
+active tab. The only source file is `bruvtab.el`; `default.nix` packages
+it and `LICENSE` is the AGPLv3 text.
 
 ## Core insight: there is no direct id mapping
 
@@ -151,3 +152,23 @@ The native backend is exercised against the live mediator on
 backend and the tracker are validated by mocking `bruvtab--json` and
 `bruvtab--firefox-x11-windows` (there is no `$DISPLAY`/EXWM here, so the X11
 side is mocked either way).
+
+## Packaging (Nix)
+
+- License: AGPL3Plus (AGPLv3 or later). `LICENSE` is the AGPLv3 text, and
+  the `bruvtab.el` header carries the matching "version 3 or later"
+  notice.
+- `default.nix` builds an Emacs package with `emacs.pkgs.melpaBuild`
+  (`src = lib.cleanSource ./.`, byte-compiles with
+  `turnCompilationWarningToError`).
+- `postPatch` rewrites the `bruvtab-program` default to the nix store
+  path of the bruvtab executable, using `lib.getExe' bruvtab "bruvtab"`
+  (the upstream flake lacks `meta.mainProgram`; plain `lib.getExe` emits
+  a deprecation warning).
+- The bruvtab executable comes from
+  `builtins.getFlake "github:pschmitt/bruvtab"` →
+  `packages.<system>.bruvtab` (same source as the NUR `firefox.nix`
+  module that installs the native messaging host).
+- Build: `nix --extra-experimental-features "nix-command flakes" build
+  --impure --expr '(import ./default.nix {})'` (the `flakes` feature is
+  required for `builtins.getFlake`).
