@@ -2,7 +2,7 @@
 
 Glue between EXWM X11 windows and the `bruvtab`/`brotab` `--json` commands.
 Goal: given an EXWM buffer that is a Firefox window, return the URL of its
-active tab. The only source file is `bruvtab.el`; `default.nix` packages
+active tab. The only source file is `bruvtab.el`; `flake.nix` packages
 it and `LICENSE` is the AGPLv3 text.
 
 ## Core insight: there is no direct id mapping
@@ -153,22 +153,35 @@ backend and the tracker are validated by mocking `bruvtab--json` and
 `bruvtab--firefox-x11-windows` (there is no `$DISPLAY`/EXWM here, so the X11
 side is mocked either way).
 
-## Packaging (Nix)
+## Packaging (Nix flake)
 
 - License: AGPL3Plus (AGPLv3 or later). `LICENSE` is the AGPLv3 text, and
   the `bruvtab.el` header carries the matching "version 3 or later"
   notice.
-- `default.nix` builds an Emacs package with `emacs.pkgs.melpaBuild`
+- `flake.nix` uses **flake-parts** (`hercules-ci/flake-parts`, `outputs =
+  inputs@{ flake-parts, ... }: flake-parts.lib.mkFlake { inherit inputs; }
+  { systems = [...]; perSystem = { system, pkgs, lib, config, ... }: {...} }")
+  and builds an Emacs package with `emacs.pkgs.melpaBuild`
   (`src = lib.cleanSource ./.`, byte-compiles with
-  `turnCompilationWarningToError`).
+  `turnCompilationWarningToError`). Exposes `packages.<system>.bruvtab`
+  plus `packages.<system>.default` (= the Emacs package) for
+  x86_64-linux + aarch64-linux; also a `devShells.<system>.default` with
+  the bruvtab executable on `$PATH`.
 - `postPatch` rewrites the `bruvtab-program` default to the nix store
   path of the bruvtab executable, using `lib.getExe' bruvtab "bruvtab"`
   (the upstream flake lacks `meta.mainProgram`; plain `lib.getExe` emits
   a deprecation warning).
-- The bruvtab executable comes from
-  `builtins.getFlake "github:pschmitt/bruvtab"` →
+- Inputs: `nixpkgs` (pinned to `nixos-unstable` in `flake.lock`),
+  `flake-parts` (with its `nixpkgs-lib` input) and `bruvtab`
+  (`github:pschmitt/bruvtab`, `nixpkgs` follows ours) →
   `packages.<system>.bruvtab` (same source as the NUR `firefox.nix`
   module that installs the native messaging host).
-- Build: `nix --extra-experimental-features "nix-command flakes" build
-  --impure --expr '(import ./default.nix {})'` (the `flakes` feature is
-  required for `builtins.getFlake`).
+- Build: `nix build`. `flake.lock` is committed; `flake.nix` must be
+  tracked by Git or nix refuses to evaluate the flake.
+- Note: the flake's `substituteInPlace` uses the package-internal
+  `${bruvtabCli}` expression — keep it inside the `''…''` string as an
+  interpolation, not shell syntax. The input's package must be bound
+  under a *different* name (e.g. `bruvtabCli`): inside `let`, Nix is
+  recursive, so `bruvtabCli = bruvtab.packages...bruvtab` where the
+  local name is also `bruvtab` recurses infinitely against our own
+  `packages.bruvtab`.
