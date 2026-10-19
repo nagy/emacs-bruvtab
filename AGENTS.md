@@ -167,6 +167,10 @@ side is mocked either way).
   plus `packages.<system>.default` (= the Emacs package) for
   x86_64-linux + aarch64-linux; also a `devShells.<system>.default` with
   the bruvtab executable on `$PATH`.
+- `version` derives from `self.lastModifiedDate` (flake self-reference,
+  added to the `outputs` argument set) as
+  `0.1.0-unstable-<YYYY-MM-DD>`. Fallback is the epoch `19700101` when the
+  source is not a git checkout. Do not hard-code the date.
 - `postPatch` rewrites the `bruvtab-program` default to the nix store
   path of the bruvtab executable, using `lib.getExe' bruvtab "bruvtab"`
   (the upstream flake lacks `meta.mainProgram`; plain `lib.getExe` emits

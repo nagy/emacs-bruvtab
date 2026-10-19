@@ -12,6 +12,7 @@
 
   outputs =
     inputs@{
+      self,
       flake-parts,
       nixpkgs,
       bruvtab,
@@ -38,7 +39,13 @@
         {
           packages.bruvtab = melpaBuild {
             pname = "bruvtab";
-            version = "0.1.0-unstable-2026-08-19";
+            # Derive the date from the flake self-reference.  Fall back to
+            # the epoch when the source is not a git checkout.
+            version =
+              let
+                d = toString (self.lastModifiedDate or "19700101000000");
+              in
+              "0.1.0-unstable-${builtins.substring 0 4 d}-${builtins.substring 4 2 d}-${builtins.substring 6 2 d}";
 
             src = lib.cleanSource ./.;
 
