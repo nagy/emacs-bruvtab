@@ -90,7 +90,7 @@
   :type 'string)
 
 (defcustom bruvtab-backend 'native
-  "How to query bruvtab.
+  "Backend for bruvtab queries.
 `native' talks HTTP directly to the running bruvtab mediator (fast, no
 Python startup).  `cli' shells out to `bruvtab-program'."
   :type '(choice (const native) (const cli)))
@@ -524,7 +524,8 @@ Maintained by `bruvtab-update-window-id-map' / `bruvtab-start-window-tracking'."
   "Seconds between updates of `bruvtab-window-id-map' while tracking."
   :type 'number)
 
-(defvar bruvtab--track-timer nil)
+(defvar bruvtab--track-timer nil
+  "Repeating timer of `bruvtab-start-window-tracking', or nil.")
 
 (defun bruvtab-update-window-id-map ()
   "Recompute `bruvtab-window-id-map' from current X11 and bruvtab state.
