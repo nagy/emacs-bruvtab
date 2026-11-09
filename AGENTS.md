@@ -91,6 +91,12 @@ take an optional SNAPSHOT plist (`:tabs`, `:active`, `:tabs-by-id`,
 pass + two raw HTTP GETs); in cli mode it uses `bruvtab-tabs` +
 `bruvtab-active` (two subprocess calls).
 
+`bruvtab-url-for-buffer` takes SNAPSHOT too, and `bruvtab-show-url` builds
+one snapshot after the Firefox check, then reuses it for both the match
+test and the URL. Do not add a helper that silently fetches its own
+snapshot on a path that already has one: one probe pass costs up to
+`bruvtab-probe-timeout` plus two HTTP GETs per client.
+
 ## Fallback tracker semantics
 
 `bruvtab-update-window-id-map` rebuilds `bruvtab-window-id-map`

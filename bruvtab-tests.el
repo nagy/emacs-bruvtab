@@ -238,6 +238,52 @@ must bind the flag instead of inheriting the buffer's value."
         (should (equal (bruvtab-url-for-buffer (current-buffer))
                        "https://example.com"))))))
 
+(ert-deftest bruvtab-test-url-for-buffer-accepts-snapshot ()
+  "A supplied snapshot is used instead of fetching a new one."
+  (let ((snapshot (bruvtab-test--snapshot
+                   (list (bruvtab-test--tab "a.2.1" "Page" "https://example.com"))
+                   '(("a.2" . "a.2.1"))))
+        (fetches 0))
+    (cl-letf (((symbol-function 'bruvtab--snapshot)
+               (lambda () (cl-incf fetches) snapshot)))
+      (bruvtab-test--with-firefox-buffer "Page — Mozilla Firefox"
+        (should (equal (bruvtab-url-for-buffer (current-buffer) snapshot)
+                       "https://example.com"))
+        (should (= fetches 0))))))
+
+(ert-deftest bruvtab-test-show-url-fetches-once ()
+  "The command builds one snapshot and reuses it on both paths."
+  (let ((snapshot (bruvtab-test--snapshot
+                   (list (bruvtab-test--tab "a.2.1" "Page" "https://example.com"))
+                   '(("a.2" . "a.2.1"))))
+        (fetches 0)
+        (messages nil))
+    (cl-letf (((symbol-function 'bruvtab--snapshot)
+               (lambda () (cl-incf fetches) snapshot))
+              ((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (push (apply #'format fmt args) messages))))
+      (bruvtab-test--with-firefox-buffer "Page — Mozilla Firefox"
+        (bruvtab-show-url)
+        (should (= fetches 1))
+        (should (equal (car messages) "https://example.com"))))
+    (setq fetches 0)
+    (cl-letf (((symbol-function 'bruvtab--snapshot)
+               (lambda () (cl-incf fetches) snapshot)))
+      (bruvtab-test--with-firefox-buffer "Some unmatched title — Mozilla Firefox"
+        (bruvtab-show-url)
+        (should (= fetches 1))))))
+
+(ert-deftest bruvtab-test-show-url-non-firefox-no-probe ()
+  "A non-Firefox buffer errors before the mediator is probed."
+  (let ((fetches 0))
+    (cl-letf (((symbol-function 'bruvtab--snapshot)
+               (lambda () (cl-incf fetches) nil)))
+      (with-temp-buffer
+        (setq-local exwm-class-name "Emacs")
+        (should-error (bruvtab-show-url) :type 'user-error))
+      (should (= fetches 0)))))
+
 (ert-deftest bruvtab-test-url-for-buffer-non-firefox ()
   "A non-Firefox buffer has no window id and no URL."
   (let ((snapshot (bruvtab-test--snapshot nil nil)))

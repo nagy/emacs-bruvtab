@@ -603,10 +603,11 @@ SNAPSHOT is an optional pre-fetched snapshot plist."
     (when-let* ((window-id (bruvtab-window-id-for-buffer buffer snapshot)))
       (bruvtab-active-tab-for-window window-id snapshot))))
 
-(defun bruvtab-url-for-buffer (buffer)
+(defun bruvtab-url-for-buffer (buffer &optional snapshot)
   "Return the URL currently displayed in EXWM BUFFER, or nil.
-BUFFER should be an `exwm-mode' buffer showing a Firefox window."
-  (let ((snapshot (bruvtab--snapshot)))
+BUFFER should be an `exwm-mode' buffer showing a Firefox window.
+SNAPSHOT is an optional pre-fetched snapshot plist."
+  (let ((snapshot (or snapshot (bruvtab--snapshot))))
     (when-let* ((tab (bruvtab-tab-for-buffer buffer snapshot)))
       (cdr (assq 'url tab)))))
 
@@ -616,13 +617,15 @@ BUFFER should be an `exwm-mode' buffer showing a Firefox window."
 (defun bruvtab-show-url ()
   "Display the bruvtab URL of the current EXWM Firefox window."
   (interactive)
-  (cond
-   ((not (bruvtab-firefox-buffer-p (current-buffer)))
+  (unless (bruvtab-firefox-buffer-p (current-buffer))
     (user-error "Not a Firefox EXWM window"))
-   ((null (bruvtab-tab-for-buffer (current-buffer)))
-    (message "No bruvtab match for %s" (buffer-name)))
-   (t
-    (message "%s" (bruvtab-url-for-buffer (current-buffer))))))
+  ;; Fetch once and reuse: a second snapshot would probe every mediator
+  ;; port again and repeat both HTTP GETs.
+  (let* ((snapshot (bruvtab--snapshot))
+         (tab (bruvtab-tab-for-buffer (current-buffer) snapshot)))
+    (if tab
+        (message "%s" (cdr (assq 'url tab)))
+      (message "No bruvtab match for %s" (buffer-name)))))
 
 ;;;###autoload
 (defun bruvtab-debug ()
