@@ -35,6 +35,7 @@
 
 (defun bruvtab-test--tab (id title url)
   "Return a bruvtab tab alist with ID, TITLE and URL."
+  (declare (pure t) (side-effect-free t))
   (list (cons 'id id) (cons 'title title) (cons 'url url)
         (cons 'playing nil) (cons 'muted nil)))
 
@@ -96,6 +97,30 @@ TITLE becomes the buffer's `exwm-title'.  The buffer has a live
   (should (equal (bruvtab--window-id-of "1.2") "1.2"))
   (should (equal (bruvtab--window-id-of "a.b.c") "a.b"))
   (should (null (bruvtab--window-id-of nil))))
+
+(ert-deftest bruvtab-test-window-id-of-edges ()
+  "Paths that do not look like a tab id come back unchanged."
+  (dolist (case '(("a.1." . "a.1.")
+                  (".2" . ".2")
+                  ("a" . "a")
+                  ("a..b" . "a.")
+                  ("a.1.2.3" . "a.1.2")))
+    (should (equal (bruvtab--window-id-of (car case)) (cdr case)))))
+
+(ert-deftest bruvtab-test-window-id-of-keeps-match-data ()
+  "The split leaves the global match data untouched."
+  (string-match (rx (group "b")) "ab")
+  (let ((before (match-data)))
+    (bruvtab--window-id-of "a.1.2")
+    (should (equal (match-data) before))))
+
+(ert-deftest bruvtab-test-window-ids-from-tabs-order ()
+  "Window ids keep the tab order and drop duplicates."
+  (should (equal (bruvtab--window-ids-from-tabs
+                  (list (bruvtab-test--tab "a.1.1" "One" "u")
+                        (bruvtab-test--tab "a.2.1" "Two" "u")
+                        (bruvtab-test--tab "a.1.2" "Three" "u")))
+                 '("a.1" "a.2"))))
 
 ;;;; Native backend parsing
 

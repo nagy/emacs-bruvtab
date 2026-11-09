@@ -147,6 +147,12 @@ HTTP/1.0 client (`bruvtab--native-fetch`) that GETs `/list_tabs` +
   built on it must append a final `t` to return boolean truth.
 - `call-process` stdout+stderr into a temp buffer: destination `(list t t)`.
 - `hash-table-values`/`hash-table-keys` need `(require 'subr-x)`.
+- Pure helpers carry `(declare (pure t) (side-effect-free t))`:
+  `bruvtab--window-id-of` and `bruvtab--window-ids-from-tabs`. A
+  function that calls `string-match` does not qualify, because that sets
+  the global match data. `bruvtab--window-id-of` therefore splits on
+  `cl-position` instead of a regexp. Keep new pure helpers match-data
+  free before you annotate them.
 - `bruvtab` writes `--json` **after** the subcommand
   (`bruvtab windows --json`), not before. The switch lives in
   `bruvtab-json-argument`; the name must not end in `-flag`, because

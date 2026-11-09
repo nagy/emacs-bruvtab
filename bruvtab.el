@@ -385,15 +385,14 @@ Each alist has keys `id', `title', `url', `playing' and `muted'."
   "Return the window-id part of bruvtab ID (\"a.1\" from \"a.1.2\").
 Only strip the final \".N\" segment when a dot remains, so a plain window
 id such as \"a.1\" is returned unchanged."
-  (if (and id
-           (string-match (rx string-start
-                             (group (0+ nonl))
-                             "."
-                             (1+ (not (any ".")))
-                             string-end)
-                         id)
-           (string-match-p (rx ".") (match-string 1 id)))
-      (match-string 1 id)
+  (declare (pure t) (side-effect-free t))
+  (if id
+      (let ((dot (cl-position ?. id :from-end t)))
+        (if (and dot
+                 (< dot (1- (length id)))
+                 (cl-position ?. id :end dot))
+            (substring id 0 dot)
+          id))
     id))
 
 (defun bruvtab--tabs-by-id (&optional tabs)
@@ -405,6 +404,7 @@ TABS defaults to the result of `bruvtab-tabs'."
 
 (defun bruvtab--window-ids-from-tabs (tabs)
   "Return unique window ids (e.g. \"a.1\") from TABS, preserving order."
+  (declare (pure t) (side-effect-free t))
   (let (ids)
     (dolist (tab tabs)
       (let ((wid (bruvtab--window-id-of (cdr (assq 'id tab)))))
