@@ -20,7 +20,7 @@
 ;; Version: 0.1.0
 ;; URL: https://github.com/nagy/emacs-bruvtab
 ;; Package-Requires: ((emacs "28.1"))
-;; Keywords: web, exwm
+;; Keywords: web, tools, unix
 
 ;;; Commentary:
 
@@ -78,15 +78,15 @@
 (defvar exwm-title)
 
 (defgroup bruvtab nil
-  "bruvtab (brotab) integration for EXWM Firefox windows."
+  "Integration with bruvtab (brotab) for EXWM Firefox windows."
   :group 'web)
 
 (defcustom bruvtab-program "bruvtab"
   "Name or path of the bruvtab executable (used by the `cli' backend)."
   :type 'string)
 
-(defcustom bruvtab-json-flag "--json"
-  "Command-line flag that makes bruvtab emit JSON."
+(defcustom bruvtab-json-argument "--json"
+  "Argument that makes the bruvtab CLI emit JSON."
   :type 'string)
 
 (defcustom bruvtab-backend 'native
@@ -156,16 +156,16 @@ Signals an error on non-zero exit."
   (with-temp-buffer
     (let ((status (apply #'call-process bruvtab-program nil (list t t) nil args)))
       (unless (eql status 0)
-        (error "bruvtab %s failed (exit %s): %s"
+        (error "Bruvtab %s failed (exit %s): %s"
                (mapconcat #'shell-quote-argument args " ")
                status
                (string-trim (buffer-string))))
       (string-trim (buffer-string)))))
 
 (defun bruvtab--json (&rest args)
-  "Run bruvtab with ARGS plus `bruvtab-json-flag' and parse JSON output.
+  "Run bruvtab with ARGS plus `bruvtab-json-argument' and parse JSON output.
 Returns a list or alist (symbol keys); JSON false/null become nil."
-  (let ((out (apply #'bruvtab--call (append args (list bruvtab-json-flag)))))
+  (let ((out (apply #'bruvtab--call (append args (list bruvtab-json-argument)))))
     (if (string-empty-p out)
         nil
       (json-parse-string out
@@ -220,9 +220,10 @@ concurrently and are bounded by `bruvtab-probe-timeout'."
     (nreverse result)))
 
 (defun bruvtab--native-fetch (host port path)
-  "Fetch PATH from the mediator over a raw HTTP/1.0 connection.
-Reads exactly Content-Length bytes, so completion is data-driven instead of
-relying on EOF/sentinel delivery (which can lag in an interactive session)."
+  "Fetch PATH from the mediator at HOST:PORT over a raw HTTP connection.
+The HTTP version is 1.0.  Reads exactly Content-Length bytes, so completion is
+data-driven instead of relying on EOF/sentinel delivery (which can lag in an
+interactive session)."
   (let* ((chunks nil)
          (proc (condition-case nil
                    (make-network-process
@@ -236,7 +237,7 @@ relying on EOF/sentinel delivery (which can lag in an interactive session)."
                     :filter (lambda (_p chunk) (push chunk chunks)))
                  (error nil))))
     (unless proc
-      (error "bruvtab: cannot connect to %s:%d" host port))
+      (error "Bruvtab: cannot connect to %s:%d" host port))
     (unwind-protect
         (let ((request (format "GET %s HTTP/1.0\r\nHost: %s:%d\r\n\r\n"
                                path host port))
@@ -252,32 +253,33 @@ relying on EOF/sentinel delivery (which can lag in an interactive session)."
               (setq header-end (match-end 0))
               (let ((header (substring raw 0 (match-beginning 0))))
                 (unless (string-match "\\`HTTP/1\\.[01] 200 " header)
-                  (error "bruvtab: bad HTTP status from %s:%d%s" host port path))
+                  (error "Bruvtab: bad HTTP status from %s:%d%s" host port path))
                 (when (string-match "Content-Length:[ \t]*\\([0-9]+\\)" header)
                   (setq content-length (string-to-number (match-string 1 header))))))
             (unless content-length
               (accept-process-output proc 0.001)))
           (unless content-length
-            (error "bruvtab: timeout waiting for headers from %s:%d%s" host port path))
+            (error "Bruvtab: timeout waiting for headers from %s:%d%s" host port path))
           ;; Wait until the declared body length has arrived.
           (while (and (< (length raw) (+ header-end content-length))
                       (< (float-time) deadline))
             (accept-process-output proc 0.001)
             (setq raw (mapconcat #'identity (reverse chunks) "")))
           (unless (>= (length raw) (+ header-end content-length))
-            (error "bruvtab: timeout reading body from %s:%d%s" host port path))
+            (error "Bruvtab: timeout reading body from %s:%d%s" host port path))
           (let ((body (decode-coding-string
                        (substring raw header-end (+ header-end content-length))
                        'utf-8)))
             (if (equal body "<ERROR>")
-                (error "bruvtab: mediator returned <ERROR> for %s:%d%s"
+                (error "Bruvtab: mediator returned <ERROR> for %s:%d%s"
                        host port path)
               body)))
       (when (process-live-p proc) (delete-process proc)))))
 
 (defun bruvtab--native-fetch-all (&optional want-tabs want-active)
-  "Fetch native tabs and/or active tabs in one pass over clients.
-Returns a list (TABS ACTIVE); unrequested elements are nil."
+  "Fetch tabs and/or active tabs in one pass over clients.
+WANT-TABS and WANT-ACTIVE select the two parts.  Returns a list (TABS
+ACTIVE); unrequested elements are nil."
   (let ((tabs nil)
         (active nil))
     (dolist (client (bruvtab--native-clients))
@@ -387,7 +389,8 @@ SNAPSHOT, when given, is a `bruvtab--snapshot' plist and avoids refetching."
                  :test #'equal)))))
 
 (defun bruvtab-url-for-window (window-id &optional snapshot)
-  "Return the URL of the active tab in WINDOW-ID, or nil."
+  "Return the URL of the active tab in WINDOW-ID, or nil.
+SNAPSHOT is an optional pre-fetched snapshot plist."
   (when-let* ((tab (bruvtab-active-tab-for-window window-id snapshot)))
     (cdr (assq 'url tab))))
 
@@ -468,7 +471,8 @@ ACTIVE and TABS-BY-ID may be supplied to avoid refetching."
               (puthash title window-id result))))))))
 
 (defun bruvtab--window-id-by-title (buffer &optional snapshot)
-  "Return the bruvtab window id for BUFFER by matching its title."
+  "Return the bruvtab window id for BUFFER by matching its title.
+SNAPSHOT is an optional pre-fetched snapshot plist."
   (when-let* ((title (bruvtab--buffer-title buffer)))
     (let ((snapshot (or snapshot (bruvtab--snapshot))))
       (gethash title (plist-get snapshot :title->id)))))
@@ -546,14 +550,16 @@ left unassigned."
 ;;; Buffer-oriented entry points ---------------------------------------------
 
 (defun bruvtab-window-id-for-buffer (buffer &optional snapshot)
-  "Return the bruvtab window id (e.g. \"a.1\") for EXWM BUFFER, or nil."
+  "Return the bruvtab window id (e.g. \"a.1\") for EXWM BUFFER, or nil.
+SNAPSHOT is an optional pre-fetched snapshot plist."
   (when (bruvtab-firefox-buffer-p buffer)
     (let ((x11-id (bruvtab--x11-id buffer)))
       (or (bruvtab--window-id-by-title buffer snapshot)
           (and x11-id (gethash x11-id bruvtab-window-id-map))))))
 
 (defun bruvtab-tab-for-buffer (buffer &optional snapshot)
-  "Return the active tab alist for EXWM BUFFER, or nil."
+  "Return the active tab alist for EXWM BUFFER, or nil.
+SNAPSHOT is an optional pre-fetched snapshot plist."
   (let ((snapshot (or snapshot (bruvtab--snapshot))))
     (when-let* ((window-id (bruvtab-window-id-for-buffer buffer snapshot)))
       (bruvtab-active-tab-for-window window-id snapshot))))

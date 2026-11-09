@@ -131,7 +131,13 @@ HTTP/1.0 client (`bruvtab--native-fetch`) that GETs `/list_tabs` +
 - `call-process` stdout+stderr into a temp buffer: destination `(list t t)`.
 - `hash-table-values`/`hash-table-keys` need `(require 'subr-x)`.
 - `bruvtab` writes `--json` **after** the subcommand
-  (`bruvtab windows --json`), not before.
+  (`bruvtab windows --json`), not before. The switch lives in
+  `bruvtab-json-argument`; the name must not end in `-flag`, because
+  checkdoc then demands a `Non-nil means` docstring, which suits a
+  boolean, not a string.
+- The `;; Keywords:` header must list only standard keywords
+  (`finder-known-keywords`), or `package-lint` fails the lint check.
+  `web, tools, unix` are standard. `exwm` is not.
 - Raw network process: use `:filter` + `:sentinel`, never the process
   buffer — the default buffer gets "connection broken by remote peer" text
   inserted at EOF. Prefer reading a declared `Content-Length` byte count
@@ -166,26 +172,47 @@ side is mocked either way).
   `turnCompilationWarningToError`). Exposes `packages.<system>.bruvtab`
   plus `packages.<system>.default` (= the Emacs package) for
   x86_64-linux + aarch64-linux; also a `devShells.<system>.default` with
-  the bruvtab executable on `$PATH`.
+  the bruvtab executable, `pkgs.emacs` and the treefmt wrapper on
+  `$PATH`.
+- `checks.default` is the package (the byte-compile gate).
+  `checks.lint` is a `runCommand` (`mkLint`, top-level `let`) that runs
+  `package-lint-batch-and-exit` and `checkdoc-file` on a copy of
+  `bruvtab.el` and fails on any output. Keep lint out of the package, so
+  a style finding never blocks an otherwise buildable package.
+- Formatting: `treefmt-nix` (`github:numtide/treefmt-nix`, `nixpkgs`
+  follows ours) with `programs.nixfmt.enable`. Run `nix fmt`; never
+  format `flake.nix` by hand. The flake exports `formatter.<system>` and
+  `nix flake check` builds a `treefmt-check`, so unformatted Nix code
+  fails the check.
+- The package is built by `pkgs.lib.makeOverridable`, inside
+  `perSystem`. Arguments: `emacs`, `emacsPackages`, `melpaBuild`,
+  `bruvtabCli`, `src`, `version`. A consumer can therefore replace the
+  Emacs, the CLI or the source:
+  `inputs.bruvtab.packages.${system}.bruvtab.override { emacs = pkgs.emacs-nox; }`.
+  `emacsPackages` defaults to `pkgs.emacsPackagesFor emacs`, so one
+  override moves the whole build set.
 - `version` derives from `self.lastModifiedDate` (flake self-reference,
   added to the `outputs` argument set) as
   `0.1.0-unstable-<YYYY-MM-DD>`. Fallback is the epoch `19700101` when the
-  source is not a git checkout. Do not hard-code the date.
+  source is not a git checkout. Do not hard-code the date. The flake
+  computes it in a top-level `let` and passes it to `makeOverridable`
+  as an argument, because a plain import cannot know it.
 - `postPatch` rewrites the `bruvtab-program` default to the nix store
-  path of the bruvtab executable, using `lib.getExe' bruvtab "bruvtab"`
+  path of the bruvtab executable, using `lib.getExe' bruvtabCli "bruvtab"`
   (the upstream flake lacks `meta.mainProgram`; plain `lib.getExe` emits
-  a deprecation warning).
+  a deprecation warning). `bruvtabCli` is a `makeOverridable` argument,
+  so it is bound inside the function, not in the outer `let`.
 - Inputs: `nixpkgs` (pinned to `nixos-unstable` in `flake.lock`),
-  `flake-parts` (with its `nixpkgs-lib` input) and `bruvtab`
-  (`github:pschmitt/bruvtab`, `nixpkgs` follows ours) →
+  `flake-parts` (with its `nixpkgs-lib` input), `treefmt-nix` and
+  `bruvtab` (`github:pschmitt/bruvtab`, `nixpkgs` follows ours) →
   `packages.<system>.bruvtab` (same source as the NUR `firefox.nix`
   module that installs the native messaging host).
 - Build: `nix build`. `flake.lock` is committed; `flake.nix` must be
   tracked by Git or nix refuses to evaluate the flake.
-- Note: the flake's `substituteInPlace` uses the package-internal
-  `${bruvtabCli}` expression — keep it inside the `''…''` string as an
-  interpolation, not shell syntax. The input's package must be bound
-  under a *different* name (e.g. `bruvtabCli`): inside `let`, Nix is
-  recursive, so `bruvtabCli = bruvtab.packages...bruvtab` where the
-  local name is also `bruvtab` recurses infinitely against our own
-  `packages.bruvtab`.
+- Note: the `substituteInPlace` uses the package-internal `${bruvtabCli}`
+  expression — keep it inside the `''…''` string as an interpolation,
+  not shell syntax. The input's package must be bound under a
+  *different* name (e.g. `bruvtabCli`): inside `let`, Nix is recursive,
+  so `bruvtabCli = bruvtab.packages...bruvtab` where the local name is
+  also `bruvtab` recurses infinitely against our own `packages.bruvtab`.
+  The local package attribute is therefore named `bruvtabEmacs`.
