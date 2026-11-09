@@ -47,12 +47,14 @@
           {
             nativeBuildInputs = [
               (pkgs.emacsPackages.emacsWithPackages (epkgs: [ epkgs.package-lint ]))
+              # Makes $HOME a writable copy of $TMPDIR.  Emacs and
+              # package-lint both write into the home directory.
+              pkgs.writableTmpDirAsHomeHook
             ];
             inherit src;
             meta.description = "emacs-bruvtab checkdoc and package-lint checks";
           }
           ''
-            export HOME=$TMPDIR
             cp "$src/bruvtab.el" .
 
             # package-lint exits non-zero on any finding.  The package has

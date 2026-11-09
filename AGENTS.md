@@ -178,7 +178,9 @@ side is mocked either way).
   `checks.lint` is a `runCommand` (`mkLint`, top-level `let`) that runs
   `package-lint-batch-and-exit` and `checkdoc-file` on a copy of
   `bruvtab.el` and fails on any output. Keep lint out of the package, so
-  a style finding never blocks an otherwise buildable package.
+  a style finding never blocks an otherwise buildable package. The
+  builder gets `pkgs.writableTmpDirAsHomeHook`, which gives Emacs and
+  package-lint a writable `$HOME`. Do not set `HOME=$TMPDIR` by hand.
 - Formatting: `treefmt-nix` (`github:numtide/treefmt-nix`, `nixpkgs`
   follows ours) with `programs.nixfmt.enable`. Run `nix fmt`; never
   format `flake.nix` by hand. The flake exports `formatter.<system>` and
