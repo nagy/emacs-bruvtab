@@ -565,6 +565,7 @@ left unassigned."
     (maphash (lambda (x b) (push (cons x b) result)) bruvtab-window-id-map)
     (sort result (lambda (a b) (< (car a) (car b))))))
 
+;;;###autoload
 (defun bruvtab-start-window-tracking ()
   "Start periodically refreshing `bruvtab-window-id-map'."
   (interactive)
@@ -574,6 +575,7 @@ left unassigned."
           (run-with-timer bruvtab-track-interval bruvtab-track-interval
                           #'bruvtab-update-window-id-map))))
 
+;;;###autoload
 (defun bruvtab-stop-window-tracking ()
   "Stop refreshing `bruvtab-window-id-map'."
   (interactive)
@@ -607,6 +609,7 @@ BUFFER should be an `exwm-mode' buffer showing a Firefox window."
 
 ;;; Commands -----------------------------------------------------------------
 
+;;;###autoload
 (defun bruvtab-show-url ()
   "Display the bruvtab URL of the current EXWM Firefox window."
   (interactive)
@@ -618,6 +621,7 @@ BUFFER should be an `exwm-mode' buffer showing a Firefox window."
    (t
     (message "%s" (bruvtab-url-for-buffer (current-buffer))))))
 
+;;;###autoload
 (defun bruvtab-debug ()
   "Show a debug table of EXWM Firefox windows and their bruvtab URLs."
   (interactive)
@@ -636,6 +640,7 @@ BUFFER should be an `exwm-mode' buffer showing a Firefox window."
                           (or url "-"))))))
     (display-buffer (current-buffer))))
 
+;;;###autoload
 (defun bruvtab-diagnose ()
   "Print timings for the native probe and fetch stages."
   (interactive)

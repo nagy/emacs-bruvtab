@@ -74,7 +74,12 @@ Fallback tracker: `bruvtab-update-window-id-map`,
 `bruvtab-window-id-alist`, `bruvtab-start-window-tracking`,
 `bruvtab-stop-window-tracking`.
 
-Commands: `bruvtab-show-url`, `bruvtab-debug`.
+Commands: `bruvtab-show-url`, `bruvtab-debug`, `bruvtab-diagnose`,
+`bruvtab-start-window-tracking`, `bruvtab-stop-window-tracking`. Each
+carries a `;;;###autoload` cookie, so `melpaBuild` emits them into
+`bruvtab-autoloads.el` and `M-x` finds them without a `require`. Keep
+the cookie when adding a command; a command without one stays invisible
+after installation.
 
 Resolution order in `bruvtab-window-id-for-buffer`: title match first
 (authoritative), then `bruvtab-window-id-map` fallback.
