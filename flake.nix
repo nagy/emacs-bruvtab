@@ -72,6 +72,26 @@
 
             touch $out
           '';
+
+      # ERT suite.  No mediator and no X11 display in the sandbox: the
+      # tests mock the transport, the tab list and the X11 window list.
+      mkTests =
+        { pkgs, src }:
+        pkgs.runCommand "emacs-bruvtab-ert"
+          {
+            nativeBuildInputs = [
+              pkgs.emacs
+              pkgs.writableTmpDirAsHomeHook
+            ];
+            inherit src;
+            meta.description = "emacs-bruvtab ERT test suite";
+          }
+          ''
+            cp "$src/bruvtab.el" "$src/bruvtab-tests.el" .
+            emacs --batch -L . -l bruvtab.el -l bruvtab-tests.el \
+              -f ert-run-tests-batch-and-exit
+            touch $out
+          '';
     in
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [ treefmt-nix.flakeModule ];
@@ -122,6 +142,12 @@
               # sources enter the store.
               inherit src;
 
+              # Install the package file only.  The ERT suite stays in the
+              # repository and runs as its own check.  `files' is spliced
+              # into a MELPA recipe as text, so it takes an Elisp list
+              # literal, not a Nix list.
+              files = ''("bruvtab.el")'';
+
               # Point the default program at the store path of the CLI.
               postPatch = ''
                 substituteInPlace bruvtab.el \
@@ -162,6 +188,7 @@
             # package is the check.
             default = bruvtabEmacs;
             lint = pkgs.callPackage mkLint { inherit (bruvtabEmacs) src; };
+            tests = pkgs.callPackage mkTests { inherit (bruvtabEmacs) src; };
           };
 
           devShells.default = pkgs.mkShell {

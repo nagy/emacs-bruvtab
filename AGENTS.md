@@ -157,13 +157,31 @@ HTTP/1.0 client (`bruvtab--native-fetch`) that GETs `/list_tabs` +
 
 ## Testing
 
-The native backend is exercised against the live mediator on
-`127.0.0.1:4625` (present in this environment): `bruvtab--native-clients`,
-`bruvtab-tabs`, `bruvtab-active`, `bruvtab-windows` and
-`bruvtab-url-for-buffer` are all verified against real tab data. The CLI
-backend and the tracker are validated by mocking `bruvtab--json` and
-`bruvtab--firefox-x11-windows` (there is no `$DISPLAY`/EXWM here, so the X11
-side is mocked either way).
+`bruvtab-tests.el` holds the ERT suite (26 tests). Run it with
+`nix flake check` (it builds `checks.<system>.tests`) or directly:
+
+```sh
+emacs --batch -L . -l bruvtab.el -l bruvtab-tests.el \
+  -f ert-run-tests-batch-and-exit
+```
+
+The suite needs no mediator and no X11 display. It mocks
+`bruvtab--native-clients`, `bruvtab--native-fetch`, `bruvtab-tabs`,
+`bruvtab--json`, `bruvtab--firefox-x11-windows` and `bruvtab--snapshot`,
+and builds fake EXWM buffers with buffer-local `exwm--id`,
+`exwm-class-name` and `exwm-title`. Covered: title normalization, window
+id splitting, native line and active-id parsing, snapshot lookups, window
+tab counts, Firefox detection, buffer-to-window mapping including the
+fallback map, all three tracker rules, CLI JSON parsing (`false`/`null`
+to nil) and the sorted alist view.
+
+Manual verification against the live mediator on `127.0.0.1:4625` still
+applies: `bruvtab--native-clients`, `bruvtab-tabs`, `bruvtab-active`,
+`bruvtab-windows` and `bruvtab-url-for-buffer` are checked against real
+tab data.
+
+When editing tests, remember that a new file must be `git add`ed before
+`nix flake check` sees it: flake sources contain tracked files only.
 
 ## Packaging (Nix flake)
 
@@ -187,6 +205,13 @@ side is mocked either way).
   a style finding never blocks an otherwise buildable package. The
   builder gets `pkgs.writableTmpDirAsHomeHook`, which gives Emacs and
   package-lint a writable `$HOME`. Do not set `HOME=$TMPDIR` by hand.
+- `checks.tests` (`mkTests`, top-level `let`) copies `bruvtab.el` and
+  `bruvtab-tests.el` and runs the ERT suite with `ert-run-tests-batch-and-exit`.
+  It needs no network and no display.
+- The package sets `files = ''("bruvtab.el")''`, a MELPA recipe
+  property. `melpaBuild` splices it into the recipe as text, so it takes
+  an Elisp list literal, not a Nix list. It keeps the ERT file out of the
+  installed package.
 - Formatting: `treefmt-nix` (`github:numtide/treefmt-nix`, `nixpkgs`
   follows ours) with `programs.nixfmt.enable`. Run `nix fmt`; never
   format `flake.nix` by hand. The flake exports `formatter.<system>` and
