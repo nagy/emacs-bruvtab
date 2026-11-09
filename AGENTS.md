@@ -55,6 +55,12 @@ cannot be matched (e.g. a window titled just `Mozilla Firefox`).
 - A buffer is a Firefox window iff `exwm--id` is truthy and either
   `exwm-class-name` or `exwm-instance-name` matches
   `bruvtab-firefox-class-regexp`.
+- Every regexp in `bruvtab.el` uses `rx` syntax, not hand-written
+  backslash strings. The Firefox brand and private-window fragments
+  (`bruvtab--firefox-brand`, `bruvtab--firefox-private-suffix`) are
+  `rx` values embedded into other `rx` forms with `(regexp FRAGMENT)`.
+  The header requires Emacs 31.1, because package-lint only accepts the
+  `rx` `any` set operator from that version on.
 
 ## bruvtab.el API
 

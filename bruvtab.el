@@ -19,7 +19,7 @@
 ;; Author: Daniel Nagy
 ;; Version: 0.1.0
 ;; URL: https://github.com/nagy/emacs-bruvtab
-;; Package-Requires: ((emacs "28.1"))
+;; Package-Requires: ((emacs "31.1"))
 ;; Keywords: web, tools, unix
 
 ;;; Commentary:
@@ -112,38 +112,64 @@ Python startup).  `cli' shells out to `bruvtab-program'."
   :type 'number)
 
 (defcustom bruvtab-firefox-class-regexp
-  "\\`\\(?:Navigator\\|firefox\\|Firefox\\|firefox-esr\\|firefox-developer-edition\\|nightly\\|aurora\\|iceweasel\\|librewolf\\|waterfox\\)\\'"
+  (rx string-start
+      (or "Navigator"
+          "firefox"
+          "Firefox"
+          "firefox-esr"
+          "firefox-developer-edition"
+          "nightly"
+          "aurora"
+          "iceweasel"
+          "librewolf"
+          "waterfox")
+      string-end)
   "Regexp matching the WM_CLASS class or instance of a Firefox window.
 Tested (case-insensitively, via `case-fold-search') against both
 `exwm-class-name' and `exwm-instance-name'."
   :type 'regexp)
 
 (defconst bruvtab--firefox-brand
-  (concat "\\(?:Mozilla \\)?"
-          "\\(?:Firefox\\(?:\\s-+\\(?:Nightly\\|Developer Edition\\|ESR"
-          "\\|Beta\\|Alpha\\|Preview\\)\\)?"
-          "\\|Nightly\\|Aurora\\|Waterfox\\|LibreWolf\\|Iceweasel\\)")
+  (rx (opt "Mozilla ")
+      (or (seq "Firefox"
+               (opt (seq (1+ (syntax whitespace))
+                         (or "Nightly" "Developer Edition" "ESR"
+                             "Beta" "Alpha" "Preview"))))
+          "Nightly"
+          "Aurora"
+          "Waterfox"
+          "LibreWolf"
+          "Iceweasel"))
   "Regexp fragment matching a Firefox-family brand.")
 
 (defconst bruvtab--firefox-private-suffix
-  "\\(?:\\s-*(\\(?:Private\\(?: Browsing\\)?\\|Work\\|Personal\\))\\)?"
+  (rx (opt (0+ (syntax whitespace))
+           "("
+           (or (seq "Private" (opt " Browsing"))
+               "Work"
+               "Personal")
+           ")"))
   "Regexp fragment matching an optional private-window parenthetical.")
 
 (defcustom bruvtab-firefox-title-suffix-regexp
-  (concat "\\s-*[-—–]\\s-*"
-          bruvtab--firefox-brand
-          bruvtab--firefox-private-suffix
-          "\\s-*\\'")
+  (rx (0+ (syntax whitespace))
+      (any "-–—")
+      (0+ (syntax whitespace))
+      (regexp bruvtab--firefox-brand)
+      (regexp bruvtab--firefox-private-suffix)
+      (0+ (syntax whitespace))
+      string-end)
   "Regexp matching the browser suffix Firefox appends to a window title.
 The match must reach end of string.  Used only to strip the suffix from an
 X11 window title before comparing it with a bruvtab tab title."
   :type 'regexp)
 
 (defcustom bruvtab-firefox-bare-title-regexp
-  (concat "\\`"
-          bruvtab--firefox-brand
-          bruvtab--firefox-private-suffix
-          "\\s-*\\'")
+  (rx string-start
+      (regexp bruvtab--firefox-brand)
+      (regexp bruvtab--firefox-private-suffix)
+      (0+ (syntax whitespace))
+      string-end)
   "Regexp matching a Firefox window title that has no page title.
 Such titles (e.g. \"Mozilla Firefox\") normalize to the empty string."
   :type 'regexp)
@@ -249,12 +275,15 @@ interactive session)."
           ;; Wait for the header terminator, then parse Content-Length.
           (while (and (null content-length) (< (float-time) deadline))
             (setq raw (mapconcat #'identity (reverse chunks) ""))
-            (when (string-match "\r?\n\r?\n" raw)
+            (when (string-match (rx (opt "\r") "\n" (opt "\r") "\n") raw)
               (setq header-end (match-end 0))
               (let ((header (substring raw 0 (match-beginning 0))))
-                (unless (string-match "\\`HTTP/1\\.[01] 200 " header)
+                (unless (string-match (rx string-start "HTTP/1." (any "01") " 200 ") header)
                   (error "Bruvtab: bad HTTP status from %s:%d%s" host port path))
-                (when (string-match "Content-Length:[ \t]*\\([0-9]+\\)" header)
+                (when (string-match (rx "Content-Length:"
+                                       (0+ (any " \t"))
+                                       (group (1+ digit)))
+                                    header)
                   (setq content-length (string-to-number (match-string 1 header))))))
             (unless content-length
               (accept-process-output proc 0.001)))
@@ -357,8 +386,13 @@ Each alist has keys `id', `title', `url', `playing' and `muted'."
 Only strip the final \".N\" segment when a dot remains, so a plain window
 id such as \"a.1\" is returned unchanged."
   (if (and id
-           (string-match "\\`\\(.*\\)\\.[^.]+\\'" id)
-           (string-match-p "\\." (match-string 1 id)))
+           (string-match (rx string-start
+                             (group (0+ nonl))
+                             "."
+                             (1+ (not (any ".")))
+                             string-end)
+                         id)
+           (string-match-p (rx ".") (match-string 1 id)))
       (match-string 1 id)
     id))
 
