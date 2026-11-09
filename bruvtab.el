@@ -449,14 +449,17 @@ Returns the page-title portion used for matching bruvtab tab titles."
     (bound-and-true-p exwm--id)))
 
 (defun bruvtab-firefox-buffer-p (buffer)
-  "Return non-nil if BUFFER is an EXWM-managed Firefox window."
+  "Return non-nil if BUFFER is an EXWM-managed Firefox window.
+The WM_CLASS match is case-insensitive regardless of BUFFER's value of
+`case-fold-search', which the class regexp docstring promises."
   (with-current-buffer buffer
-    (and (bound-and-true-p exwm--id)
-         (or (and (stringp exwm-class-name)
-                  (string-match-p bruvtab-firefox-class-regexp exwm-class-name))
-             (and (stringp exwm-instance-name)
-                  (string-match-p bruvtab-firefox-class-regexp exwm-instance-name)))
-         t)))
+    (let ((case-fold-search t))
+      (and (bound-and-true-p exwm--id)
+           (or (and (stringp exwm-class-name)
+                    (string-match-p bruvtab-firefox-class-regexp exwm-class-name))
+               (and (stringp exwm-instance-name)
+                    (string-match-p bruvtab-firefox-class-regexp exwm-instance-name)))
+           t))))
 
 (defun bruvtab--buffer-title (buffer)
   "Return the normalized `exwm-title' of EXWM BUFFER, or nil."

@@ -180,6 +180,17 @@ TITLE becomes the buffer's `exwm-title'.  The buffer has a live
       (setq-local exwm-class-name name)
       (should (bruvtab-firefox-buffer-p (current-buffer))))))
 
+(ert-deftest bruvtab-test-firefox-buffer-p-case-fold ()
+  "Detection stays case-insensitive when `case-fold-search' is nil.
+The class regexp spells some brands in one case only, so the predicate
+must bind the flag instead of inheriting the buffer's value."
+  (dolist (name '("LIBREWOLF" "FireFox" "LiBrEwOlF"))
+    (bruvtab-test--with-firefox-buffer "T"
+      (setq-local exwm-class-name name)
+      (setq-local exwm-instance-name name)
+      (setq-local case-fold-search nil)
+      (should (bruvtab-firefox-buffer-p (current-buffer))))))
+
 (ert-deftest bruvtab-test-firefox-buffer-p-other ()
   "A non-Firefox class and a buffer without an X11 id are rejected."
   (bruvtab-test--with-firefox-buffer "T"
