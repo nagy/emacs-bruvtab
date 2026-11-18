@@ -174,11 +174,14 @@ HTTP/1.0 client (`bruvtab--native-fetch`) that GETs `/list_tabs` +
 
 ## Testing
 
-`bruvtab-tests.el` holds the ERT suite (26 tests). Run it with
-`nix flake check` (it builds `checks.<system>.tests`) or directly:
+`test/bruvtab-test.el` holds the ERT suite (33 tests). The test tree is
+`test/` (singular), one file per source file, named `<unit>-test.el`.
+Shared helpers go in `<name>-test-helper.el`, so the `test/*-test.el`
+glob stays a test-only list. Run the suite with `nix flake check` (it
+builds `checks.<system>.tests`) or directly:
 
 ```sh
-emacs --batch -L . -l bruvtab.el -l bruvtab-tests.el \
+emacs --batch -L . -L test -l bruvtab.el test/bruvtab-test.el \
   -f ert-run-tests-batch-and-exit
 ```
 
@@ -217,18 +220,25 @@ When editing tests, remember that a new file must be `git add`ed before
   `$PATH`.
 - `checks.default` is the package (the byte-compile gate).
   `checks.lint` is a `runCommand` (`mkLint`, top-level `let`) that runs
-  `package-lint-batch-and-exit` and `checkdoc-file` on a copy of
-  `bruvtab.el` and fails on any output. Keep lint out of the package, so
+  `package-lint-batch-and-exit` and `checkdoc-file` and fails on any
+  output. The lint surface includes `bruvtab.el` and `test/*-test.el`, so
+  tests keep the same header, docstring and prefix rules as the code
+  under test. `package-lint-main-file` is set, because without it
+  package-lint treats each test file as its own package and demands a
+  `Package-Requires` header. Keep lint out of the package, so
   a style finding never blocks an otherwise buildable package. The
   builder gets `pkgs.writableTmpDirAsHomeHook`, which gives Emacs and
   package-lint a writable `$HOME`. Do not set `HOME=$TMPDIR` by hand.
-- `checks.tests` (`mkTests`, top-level `let`) copies `bruvtab.el` and
-  `bruvtab-tests.el` and runs the ERT suite with `ert-run-tests-batch-and-exit`.
-  It needs no network and no display.
+- `checks.tests` (`mkTests`, top-level `let`) copies the source tree and
+  runs the ERT suite with `ert-run-tests-batch-and-exit`. A `failglob`
+  `printf` over `test/*-test.el` builds the `-l <file>` argument pairs,
+  so a new test file needs no flake edit. It needs no network and no
+  display.
 - The package sets `files = ''("bruvtab.el")''`, a MELPA recipe
   property. `melpaBuild` splices it into the recipe as text, so it takes
-  an Elisp list literal, not a Nix list. It keeps the ERT file out of the
-  installed package.
+  an Elisp list literal, not a Nix list. It keeps the test tree out of
+  the installed package, because MELPA `files` specs never descend into
+  subdirectories.
 - Formatting: `treefmt-nix` (`github:numtide/treefmt-nix`, `nixpkgs`
   follows ours) with `programs.nixfmt.enable`. Run `nix fmt`; never
   format `flake.nix` by hand. The flake exports `formatter.<system>` and

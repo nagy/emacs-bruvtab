@@ -55,16 +55,23 @@
             meta.description = "emacs-bruvtab checkdoc and package-lint checks";
           }
           ''
-            cp "$src/bruvtab.el" .
+            cp -r "$src"/. .
 
             # package-lint exits non-zero on any finding.  The package has
             # no external dependencies, so it needs no package-alist stubs.
-            emacs --batch -l package-lint -f package-lint-batch-and-exit bruvtab.el
+            # `package-lint-main-file' makes the test files belong to this
+            # package instead of each being linted as its own package with
+            # a missing `Package-Requires' header.
+            emacs --batch -l package-lint \
+              --eval '(setq package-lint-main-file "bruvtab.el")' \
+              -f package-lint-batch-and-exit \
+              bruvtab.el test/*-test.el
 
             # checkdoc exits 0 even when it reports problems, so gate on
             # output.
             doc=$(emacs --batch -l checkdoc \
-              --eval '(checkdoc-file "bruvtab.el")' 2>&1)
+              --eval '(mapc (lambda (f) (checkdoc-file f)) command-line-args-left)' \
+              bruvtab.el test/*-test.el 2>&1)
             if [ -n "$doc" ]; then
               printf '%s\n' "$doc"
               exit 1
@@ -87,8 +94,17 @@
             meta.description = "emacs-bruvtab ERT test suite";
           }
           ''
-            cp "$src/bruvtab.el" "$src/bruvtab-tests.el" .
-            emacs --batch -L . -l bruvtab.el -l bruvtab-tests.el \
+            cp -r "$src"/. .
+            # printf repeats "-l %s" per match.  failglob makes an empty glob
+            # a shell error, so the || guard fires even without `set -e'.
+            # Restore the default right after: later commands must keep
+            # default glob semantics.  The unquoted $test_args is
+            # intentional: the words must split into -l <file> pairs, which
+            # is safe because test file names never contain spaces.
+            shopt -s failglob
+            test_args=$(printf -- "-l %s " test/*-test.el) || { echo 'no tests matched test/*-test.el' >&2; exit 1; }
+            shopt -u failglob
+            emacs --batch -L . -L test -l bruvtab.el $test_args \
               -f ert-run-tests-batch-and-exit
             touch $out
           '';
@@ -143,7 +159,8 @@
               inherit src;
 
               # Install the package file only.  The ERT suite stays in the
-              # repository and runs as its own check.  `files' is spliced
+              # repository under `test/' and runs as its own check.
+              # `files' is spliced
               # into a MELPA recipe as text, so it takes an Elisp list
               # literal, not a Nix list.
               files = ''("bruvtab.el")'';

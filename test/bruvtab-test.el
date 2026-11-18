@@ -440,5 +440,5 @@ must bind the flag instead of inheriting the buffer's value."
   (cl-letf (((symbol-function 'bruvtab--call) (lambda (&rest _) "")))
     (should (null (bruvtab--json "tabs")))))
 
-(provide 'bruvtab-tests)
-;;; bruvtab-tests.el ends here
+(provide 'bruvtab-test)
+;;; bruvtab-test.el ends here
