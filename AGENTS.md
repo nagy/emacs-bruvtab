@@ -1,11 +1,71 @@
-# bruvtab.el — EXWM Firefox URL lookup
+# AGENTS.md — emacs-bruvtab
+
+## Purpose
 
 Glue between EXWM X11 windows and the `bruvtab`/`brotab` `--json` commands.
 Goal: given an EXWM buffer that is a Firefox window, return the URL of its
-active tab. The only source file is `bruvtab.el`; `flake.nix` packages
-it and `LICENSE` is the AGPLv3 text.
+active tab. One source file, `bruvtab.el`. `flake.nix` packages it. `LICENSE` holds the AGPLv3
+text. License: AGPL-3.0-or-later. Emacs 31.1 or newer.
 
-## Core insight: there is no direct id mapping
+## Layout
+
+- `bruvtab.el` — the whole package: queries, window mapping, snapshot, native HTTP
+  client, CLI fallback, commands.
+- `test/bruvtab-test.el` — ERT suite, 33 tests, no mediator and no X11 display.
+- `flake.nix` — flake-parts flake: package, lint check, ERT check, devShell,
+  treefmt.
+
+## Build and test
+
+- `nix flake check` — package byte-compile, lint check, ERT check, treefmt. Gate
+  for a commit.
+- `nix build` — the package.
+- `nix fmt` — nixfmt through treefmt. Never format `flake.nix` by hand.
+- Direct run: `emacs --batch -L . -L test -l bruvtab.el test/bruvtab-test.el -f
+  ert-run-tests-batch-and-exit`.
+- `M-x bruvtab-diagnose` — prints per-stage timings when a stall shows up.
+- Manual check against a live mediator on `127.0.0.1:4625`:
+  `bruvtab--native-clients`, `bruvtab-tabs`, `bruvtab-active`,
+  `bruvtab-windows`, `bruvtab-url-for-buffer`.
+
+### Flake
+
+- `flake-parts` with `nixpkgs`, `treefmt-nix` and `bruvtab`
+  (`github:pschmitt/bruvtab`, with `nixpkgs` following ours) as inputs.
+  `nixpkgs` stays pinned to `nixos-unstable` in `flake.lock`.
+- The package is `pkgs.lib.makeOverridable`, inside `perSystem`. Arguments:
+  `emacs`, `emacsPackages`, `melpaBuild`, `bruvtabCli`, `src`, `version`. A
+  consumer overrides the Emacs, the CLI or the source:
+  `inputs.bruvtab.packages.${system}.bruvtab.override { emacs = pkgs.emacs-nox; }`.
+  `emacsPackages` defaults to `pkgs.emacsPackagesFor emacs`.
+- Name the local package attribute `bruvtabEmacs`, and bind the input package as
+  `bruvtabCli`. Nix `let` is recursive, so a local name equal to `bruvtab`
+  recurses against our own `packages.bruvtab`.
+- `checks.default` is the package byte-compile gate. `checks.lint` is a
+  `runCommand` (`mkLint`) over `bruvtab.el` and `test/*-test.el`, which fails on
+  any package-lint or checkdoc output. `package-lint-main-file` is set, because
+  without it package-lint treats each test file as its own package. Keep lint out
+  of the package, so a style finding never blocks a buildable package.
+- `checks.tests` (`mkTests`) copies the source tree and runs the ERT suite. A
+  `failglob` `printf` over `test/*-test.el` builds the `-l <file>` pairs, so a new
+  test file needs no flake edit.
+- The package sets `files = ''("bruvtab.el")''`, a MELPA recipe property spliced
+  as Elisp text. It keeps the test tree out of the installed package.
+- `version` derives from `self.lastModifiedDate` as
+  `0.1.0-unstable-<YYYY-MM-DD>`, with the epoch fallback `19700101` when the
+  source is not a git checkout. The flake computes it in a top-level `let` and
+  passes it to `makeOverridable`, because a plain import cannot know it.
+- `postPatch` rewrites the `bruvtab-program` default to the store path of the
+  bruvtab executable through `lib.getExe' bruvtabCli "bruvtab"`. The upstream
+  flake carries no `meta.mainProgram`, and plain `lib.getExe` emits a deprecation
+  warning. Keep the `${bruvtabCli}` expression inside the `''...''` string as an
+  interpolation.
+- The builder gets `pkgs.writableTmpDirAsHomeHook`, which gives Emacs and
+  package-lint a writable `$HOME`. Do not set `HOME=$TMPDIR` by hand.
+
+## Architecture
+
+### Core insight: there is no direct id mapping
 
 bruvtab identifies a browser window as `<prefix>.<window_id>` (e.g. `a.1`)
 and a tab as `<prefix>.<window_id>.<tab_id>` (e.g. `a.1.2`). The Firefox
@@ -26,7 +86,7 @@ The reliable join is **title matching**, not a background poller:
 A background hash-table tracker exists only as a fallback for titles that
 cannot be matched (e.g. a window titled just `Mozilla Firefox`).
 
-## bruvtab JSON schema (the `--json` extension)
+### JSON schema
 
 ```jsonc
 // bruvtab windows --json
@@ -44,7 +104,7 @@ cannot be matched (e.g. a window titled just `Mozilla Firefox`).
 - Prefix is a single letter per client (`a` above). `client`'s last field
   names the browser (`firefox`).
 
-## Firefox window identification under X11
+### Firefox identification under X11
 
 - WM_CLASS is `instance="Navigator"`, `class="firefox"` (older/variant
   builds use `Firefox`). EXWM exposes these as buffer-local
@@ -62,7 +122,7 @@ cannot be matched (e.g. a window titled just `Mozilla Firefox`).
   The header requires Emacs 31.1, because package-lint only accepts the
   `rx` `any` set operator from that version on.
 
-## bruvtab.el API
+### API
 
 Queries: `bruvtab-windows`, `bruvtab-tabs`, `bruvtab-active`,
 `bruvtab-active-tab-for-window`, `bruvtab-url-for-window`.
@@ -97,7 +157,7 @@ test and the URL. Do not add a helper that silently fetches its own
 snapshot on a path that already has one: one probe pass costs up to
 `bruvtab-probe-timeout` plus two HTTP GETs per client.
 
-## Fallback tracker semantics
+### Fallback tracker
 
 `bruvtab-update-window-id-map` rebuilds `bruvtab-window-id-map`
 (`x11-id -> "a.N"`):
@@ -108,7 +168,7 @@ snapshot on a path that already has one: one probe pass costs up to
    unassigned, pair them — otherwise leave unassigned (the two-windows-
    opened-at-once ambiguity).
 
-## bruvtab's actual transport (for a native implementation)
+### Transport
 
 The Python CLI is not talking to a "native host socket". Two hops:
 
@@ -138,7 +198,7 @@ HTTP/1.0 client (`bruvtab--native-fetch`) that GETs `/list_tabs` +
 `/get_active_tabs` and skips `playing`/`muted`. `cli` shells out to
 `bruvtab-program` as fallback.
 
-## Implementation gotchas (do not regress)
+## Rules
 
 - `json-parse-string` returns `:false` (truthy!) unless `:false-object nil`
   is passed; also pass `:null-object nil`, `:object-type 'alist`,
@@ -158,9 +218,6 @@ HTTP/1.0 client (`bruvtab--native-fetch`) that GETs `/list_tabs` +
   `bruvtab-json-argument`; the name must not end in `-flag`, because
   checkdoc then demands a `Non-nil means` docstring, which suits a
   boolean, not a string.
-- The `;; Keywords:` header must list only standard keywords
-  (`finder-known-keywords`), or `package-lint` fails the lint check.
-  `web, tools, unix` are standard. `exwm` is not.
 - Raw network process: use `:filter` + `:sentinel`, never the process
   buffer — the default buffer gets "connection broken by remote peer" text
   inserted at EOF. Prefer reading a declared `Content-Length` byte count
@@ -171,6 +228,24 @@ HTTP/1.0 client (`bruvtab--native-fetch`) that GETs `/list_tabs` +
   Probes therefore use `:nowait t` + a bounded wait (`bruvtab-probe-timeout`),
   fired concurrently for all ports. `M-x bruvtab-diagnose` prints per-stage
   timings when a stall is suspected.
+
+## Conventions
+
+- Use `rx` syntax for every regexp, never a hand-written backslash string. Embed
+  the fragments `bruvtab--firefox-brand` and `bruvtab--firefox-private-suffix`
+  with `(regexp FRAGMENT)`.
+- Prefix public names with `bruvtab-` and private names with `bruvtab--`.
+- Give every command a `;;;###autoload` cookie. `melpaBuild` emits it into
+  `bruvtab-autoloads.el`, and a command without one stays invisible after
+  installation.
+- Keep `;; Keywords:` to standard keywords from `finder-known-keywords`. `web`,
+  `tools` and `unix` qualify. `exwm` does not, and package-lint fails on it.
+- Test file naming: `test/<unit>-test.el`, shared helpers in
+  `<name>-test-helper.el`, so the `test/*-test.el` glob stays test-only.
+- Mock `bruvtab--native-clients`, `bruvtab--native-fetch`, `bruvtab-tabs`,
+  `bruvtab--json`, `bruvtab--firefox-x11-windows` and `bruvtab--snapshot` in a
+  test, and build a fake EXWM buffer from buffer-local `exwm--id`,
+  `exwm-class-name` and `exwm-title`.
 
 ## Testing
 
@@ -200,79 +275,18 @@ applies: `bruvtab--native-clients`, `bruvtab-tabs`, `bruvtab-active`,
 `bruvtab-windows` and `bruvtab-url-for-buffer` are checked against real
 tab data.
 
-When editing tests, remember that a new file must be `git add`ed before
-`nix flake check` sees it: flake sources contain tracked files only.
+## Dependencies
 
-## Packaging (Nix flake)
+| Dependency | Required? | Why |
+|---|---|---|
+| Emacs 31.1 | required | package-lint accepts the `rx` `any` set operator from that version on. |
+| `bruvtab` CLI (`github:pschmitt/bruvtab`) | required | The `cli` backend shells out to `bruvtab-program`. The flake patches the default path. |
+| EXWM | required at runtime | Reads the buffer-local `exwm--*` variables. |
+| `subr-x` | required | `hash-table-values` and `hash-table-keys`. |
 
-- License: AGPL3Plus (AGPLv3 or later). `LICENSE` is the AGPLv3 text, and
-  the `bruvtab.el` header carries the matching "version 3 or later"
-  notice.
-- `flake.nix` uses **flake-parts** (`hercules-ci/flake-parts`, `outputs =
-  inputs@{ flake-parts, ... }: flake-parts.lib.mkFlake { inherit inputs; }
-  { systems = [...]; perSystem = { system, pkgs, lib, config, ... }: {...} }")
-  and builds an Emacs package with `emacs.pkgs.melpaBuild`
-  (`src = lib.cleanSource ./.`, byte-compiles with
-  `turnCompilationWarningToError`). Exposes `packages.<system>.bruvtab`
-  plus `packages.<system>.default` (= the Emacs package) for
-  x86_64-linux + aarch64-linux; also a `devShells.<system>.default` with
-  the bruvtab executable, `pkgs.emacs` and the treefmt wrapper on
-  `$PATH`.
-- `checks.default` is the package (the byte-compile gate).
-  `checks.lint` is a `runCommand` (`mkLint`, top-level `let`) that runs
-  `package-lint-batch-and-exit` and `checkdoc-file` and fails on any
-  output. The lint surface includes `bruvtab.el` and `test/*-test.el`, so
-  tests keep the same header, docstring and prefix rules as the code
-  under test. `package-lint-main-file` is set, because without it
-  package-lint treats each test file as its own package and demands a
-  `Package-Requires` header. Keep lint out of the package, so
-  a style finding never blocks an otherwise buildable package. The
-  builder gets `pkgs.writableTmpDirAsHomeHook`, which gives Emacs and
-  package-lint a writable `$HOME`. Do not set `HOME=$TMPDIR` by hand.
-- `checks.tests` (`mkTests`, top-level `let`) copies the source tree and
-  runs the ERT suite with `ert-run-tests-batch-and-exit`. A `failglob`
-  `printf` over `test/*-test.el` builds the `-l <file>` argument pairs,
-  so a new test file needs no flake edit. It needs no network and no
-  display.
-- The package sets `files = ''("bruvtab.el")''`, a MELPA recipe
-  property. `melpaBuild` splices it into the recipe as text, so it takes
-  an Elisp list literal, not a Nix list. It keeps the test tree out of
-  the installed package, because MELPA `files` specs never descend into
-  subdirectories.
-- Formatting: `treefmt-nix` (`github:numtide/treefmt-nix`, `nixpkgs`
-  follows ours) with `programs.nixfmt.enable`. Run `nix fmt`; never
-  format `flake.nix` by hand. The flake exports `formatter.<system>` and
-  `nix flake check` builds a `treefmt-check`, so unformatted Nix code
-  fails the check.
-- The package is built by `pkgs.lib.makeOverridable`, inside
-  `perSystem`. Arguments: `emacs`, `emacsPackages`, `melpaBuild`,
-  `bruvtabCli`, `src`, `version`. A consumer can therefore replace the
-  Emacs, the CLI or the source:
-  `inputs.bruvtab.packages.${system}.bruvtab.override { emacs = pkgs.emacs-nox; }`.
-  `emacsPackages` defaults to `pkgs.emacsPackagesFor emacs`, so one
-  override moves the whole build set.
-- `version` derives from `self.lastModifiedDate` (flake self-reference,
-  added to the `outputs` argument set) as
-  `0.1.0-unstable-<YYYY-MM-DD>`. Fallback is the epoch `19700101` when the
-  source is not a git checkout. Do not hard-code the date. The flake
-  computes it in a top-level `let` and passes it to `makeOverridable`
-  as an argument, because a plain import cannot know it.
-- `postPatch` rewrites the `bruvtab-program` default to the nix store
-  path of the bruvtab executable, using `lib.getExe' bruvtabCli "bruvtab"`
-  (the upstream flake lacks `meta.mainProgram`; plain `lib.getExe` emits
-  a deprecation warning). `bruvtabCli` is a `makeOverridable` argument,
-  so it is bound inside the function, not in the outer `let`.
-- Inputs: `nixpkgs` (pinned to `nixos-unstable` in `flake.lock`),
-  `flake-parts` (with its `nixpkgs-lib` input), `treefmt-nix` and
-  `bruvtab` (`github:pschmitt/bruvtab`, `nixpkgs` follows ours) →
-  `packages.<system>.bruvtab` (same source as the NUR `firefox.nix`
-  module that installs the native messaging host).
-- Build: `nix build`. `flake.lock` is committed; `flake.nix` must be
-  tracked by Git or nix refuses to evaluate the flake.
-- Note: the `substituteInPlace` uses the package-internal `${bruvtabCli}`
-  expression — keep it inside the `''…''` string as an interpolation,
-  not shell syntax. The input's package must be bound under a
-  *different* name (e.g. `bruvtabCli`): inside `let`, Nix is recursive,
-  so `bruvtabCli = bruvtab.packages...bruvtab` where the local name is
-  also `bruvtab` recurses infinitely against our own `packages.bruvtab`.
-  The local package attribute is therefore named `bruvtabEmacs`.
+## Workflow
+
+- `git add` a new file before `nix flake check`, because flake sources hold
+  tracked files only.
+- Keep `flake.lock` committed, and keep `flake.nix` tracked, or Nix refuses to
+  evaluate the flake.
