@@ -17,8 +17,7 @@ text. License: AGPL-3.0-or-later. Emacs 31.1 or newer.
 
 ## Build and test
 
-- `nix flake check` — package byte-compile, lint check, ERT check, treefmt. Gate
-  for a commit.
+- `nix flake check` — the gate. Run before a commit.
 - `nix build` — the package.
 - `nix fmt` — nixfmt through treefmt. Never format `flake.nix` by hand.
 - Direct run: `emacs --batch -L . -L test -l bruvtab.el test/bruvtab-test.el -f
