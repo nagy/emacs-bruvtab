@@ -286,7 +286,5 @@ tab data.
 
 ## Workflow
 
-- `git add` a new file before `nix flake check`, because flake sources hold
-  tracked files only.
-- Keep `flake.lock` committed, and keep `flake.nix` tracked, or Nix refuses to
-  evaluate the flake.
+- Keep `flake.lock` committed. The lock pins each input revision, so two
+  machines build one tree.
