@@ -151,6 +151,7 @@
             }:
             melpaBuild {
               pname = "bruvtab";
+              preferLocalBuild = true;
               inherit version;
 
               # `./.' is the repository root.  cleanSource drops VCS
