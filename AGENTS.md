@@ -41,7 +41,7 @@ text. License: AGPL-3.0-or-later. Emacs 31.1 or newer.
   `bruvtabCli`. Nix `let` is recursive, so a local name equal to `bruvtab`
   recurses against our own `packages.bruvtab`.
 - `checks.default` is the package byte-compile gate. `checks.lint` is a
-  `runCommand` (`mkLint`) over `bruvtab.el` and `test/*-test.el`, which fails on
+  `runCommandLocal` (`mkLint`) over `bruvtab.el` and `test/*-test.el`, which fails on
   any package-lint or checkdoc output. `package-lint-main-file` is set, because
   without it package-lint treats each test file as its own package. Keep lint out
   of the package, so a style finding never blocks a buildable package.

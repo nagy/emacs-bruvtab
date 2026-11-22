@@ -43,7 +43,7 @@
       # package forever.
       mkLint =
         { pkgs, src }:
-        pkgs.runCommand "emacs-bruvtab-lint"
+        pkgs.runCommandLocal "emacs-bruvtab-lint"
           {
             nativeBuildInputs = [
               (pkgs.emacsPackages.emacsWithPackages (epkgs: [ epkgs.package-lint ]))
@@ -84,7 +84,7 @@
       # tests mock the transport, the tab list and the X11 window list.
       mkTests =
         { pkgs, src }:
-        pkgs.runCommand "emacs-bruvtab-ert"
+        pkgs.runCommandLocal "emacs-bruvtab-ert"
           {
             nativeBuildInputs = [
               pkgs.emacs
