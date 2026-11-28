@@ -16,7 +16,9 @@
 ;; License along with this file.  If not, see
 ;; <https://www.gnu.org/licenses/>.
 
-;; Author: Daniel Nagy
+;; SPDX-License-Identifier: AGPL-3.0-or-later
+;; Author: Daniel Nagy <danielnagy@posteo.de>
+;; Maintainer: Daniel Nagy <danielnagy@posteo.de>
 ;; Version: 0.1.0
 ;; URL: https://github.com/nagy/emacs-bruvtab
 ;; Package-Requires: ((emacs "31.1"))
@@ -246,8 +248,9 @@ concurrently and are bounded by `bruvtab-probe-timeout'."
     (nreverse result)))
 
 (defun bruvtab--native-fetch (host port path)
-  "Fetch PATH from the mediator at HOST:PORT over a raw HTTP connection.
-The HTTP version is 1.0.  Reads exactly Content-Length bytes, so completion is
+  "Fetch a resource from the bruvtab mediator over a raw HTTP connection.
+HOST and PORT locate the mediator and PATH is the request target.  The HTTP
+version is 1.0.  Reads exactly Content-Length bytes, so completion is
 data-driven instead of relying on EOF/sentinel delivery (which can lag in an
 interactive session)."
   (let* ((chunks nil)

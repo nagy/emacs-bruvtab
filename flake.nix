@@ -4,11 +4,14 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
-    # Single formatter entry point for the repo: `nix fmt' formats every
-    # tracked file with the configured programs.
-    treefmt-nix.url = "github:numtide/treefmt-nix";
-    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
-    # The CLI the package shells out to.  Its nixpkgs follows ours so the
+    treefmt-nix = {
+      url = "github:numtide/treefmt-nix";
+      # One nixpkgs closure: the formatter shares our package set.
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    # The house Emacs package build, ERT run, lint gate and formatter.
+    common.url = "github:nagy/common";
+    # The CLI the package shells out to. Its nixpkgs follows ours so the
     # closure stays small and versions agree.
     bruvtab = {
       url = "github:pschmitt/bruvtab";
@@ -18,212 +21,44 @@
 
   outputs =
     inputs@{
-      self,
       flake-parts,
-      nixpkgs,
       treefmt-nix,
+      common,
       bruvtab,
       ...
     }:
-    let
-      # Date of the last commit as YYYY-MM-DD, folded into the version
-      # string.  Flake source info gives it as e.g. "20260922133522";
-      # slice out the year, month and day.  A plain path import has no
-      # git metadata, so fall back to the epoch instead of failing.
-      sourceInfo = inputs.self.sourceInfo or { };
-      lastModifiedDate = sourceInfo.lastModifiedDate or "19700101000000";
-      commitDate = "${builtins.substring 0 4 lastModifiedDate}-${
-        builtins.substring 4 2 lastModifiedDate
-      }-${builtins.substring 6 2 lastModifiedDate}";
-      version = "0.1.0-unstable-${commitDate}";
-
-      # checkdoc and package-lint catch style and packaging problems that
-      # byte-compilation does not.  Keep this in `checks', not in the
-      # package: lint findings must not block an otherwise buildable
-      # package forever.
-      mkLint =
-        { pkgs, src }:
-        pkgs.runCommandLocal "emacs-bruvtab-lint"
-          {
-            nativeBuildInputs = [
-              (pkgs.emacsPackages.emacsWithPackages (epkgs: [ epkgs.package-lint ]))
-              # Makes $HOME a writable copy of $TMPDIR.  Emacs and
-              # package-lint both write into the home directory.
-              pkgs.writableTmpDirAsHomeHook
-            ];
-            inherit src;
-            meta.description = "emacs-bruvtab checkdoc and package-lint checks";
-          }
-          ''
-            cp -r "$src"/. .
-
-            # package-lint exits non-zero on any finding.  The package has
-            # no external dependencies, so it needs no package-alist stubs.
-            # `package-lint-main-file' makes the test files belong to this
-            # package instead of each being linted as its own package with
-            # a missing `Package-Requires' header.
-            emacs --batch -l package-lint \
-              --eval '(setq package-lint-main-file "bruvtab.el")' \
-              -f package-lint-batch-and-exit \
-              bruvtab.el test/*-test.el
-
-            # checkdoc exits 0 even when it reports problems, so gate on
-            # output.
-            doc=$(emacs --batch -l checkdoc \
-              --eval '(mapc (lambda (f) (checkdoc-file f)) command-line-args-left)' \
-              bruvtab.el test/*-test.el 2>&1)
-            if [ -n "$doc" ]; then
-              printf '%s\n' "$doc"
-              exit 1
-            fi
-
-            touch $out
-          '';
-
-      # ERT suite.  No mediator and no X11 display in the sandbox: the
-      # tests mock the transport, the tab list and the X11 window list.
-      mkTests =
-        { pkgs, src }:
-        pkgs.runCommandLocal "emacs-bruvtab-ert"
-          {
-            nativeBuildInputs = [
-              pkgs.emacs
-              pkgs.writableTmpDirAsHomeHook
-            ];
-            inherit src;
-            meta.description = "emacs-bruvtab ERT test suite";
-          }
-          ''
-            cp -r "$src"/. .
-            # printf repeats "-l %s" per match.  failglob makes an empty glob
-            # a shell error, so the || guard fires even without `set -e'.
-            # Restore the default right after: later commands must keep
-            # default glob semantics.  The unquoted $test_args is
-            # intentional: the words must split into -l <file> pairs, which
-            # is safe because test file names never contain spaces.
-            shopt -s failglob
-            test_args=$(printf -- "-l %s " test/*-test.el) || { echo 'no tests matched test/*-test.el' >&2; exit 1; }
-            shopt -u failglob
-            emacs --batch -L . -L test -l bruvtab.el $test_args \
-              -f ert-run-tests-batch-and-exit
-            touch $out
-          '';
-    in
     flake-parts.lib.mkFlake { inherit inputs; } {
-      imports = [ treefmt-nix.flakeModule ];
-
-      # Emacs packages are pure Elisp: no ELF binaries, so evaluate on
-      # every Linux arch.
-      systems = [
-        "x86_64-linux"
-        "aarch64-linux"
+      imports = [
+        treefmt-nix.flakeModule
+        common.flakeModules.treefmt
+        common.flakeModules.emacs
       ];
 
+      systems = [ "x86_64-linux" ];
+
       perSystem =
+        { lib, system, ... }:
         {
-          system,
-          pkgs,
-          lib,
-          config,
-          ...
-        }:
-        let
-          # The package stays overridable, so a consumer can swap the
-          # Emacs, the CLI or the source:
-          #   inputs.bruvtab.packages.${system}.bruvtab.override {
-          #     emacs = pkgs.emacs-nox;
-          #   }
-          # The flake passes the commit-derived version, because a plain
-          # import of the expression cannot know it.
-          bruvtabEmacs = pkgs.lib.makeOverridable (
-            {
-              # One Emacs package set supplies the build, so an override
-              # of this argument moves every dependency with it.
-              emacs ? pkgs.emacs,
-              emacsPackages ? pkgs.emacsPackagesFor emacs,
-              melpaBuild ? emacsPackages.melpaBuild,
-              # The CLI the default `bruvtab-program' value points at.
-              # The upstream flake lacks `meta.mainProgram', so name the
-              # executable explicitly.
-              bruvtabCli ? bruvtab.packages.${system}.bruvtab,
-              src ? pkgs.lib.cleanSource ./.,
-              version ? "0.1.0",
-            }:
-            melpaBuild {
-              pname = "bruvtab";
-              preferLocalBuild = true;
-              inherit version;
+          # Version, description, licence, homepage and maintainers come from
+          # the header of bruvtab.el. The ERT suite in `test/` runs inside the
+          # package build, so `nix flake check` runs it.
+          nagy.emacs = {
+            enable = true;
+            src = ./.;
+            name = "bruvtab";
 
-              # `./.' is the repository root.  cleanSource drops VCS
-              # metadata and editor backup files, so only real package
-              # sources enter the store.
-              inherit src;
+            # `bruvtab` is not a nixpkgs attribute, so a
+            # `;; NIX-EMACS-PROGRAM:` annotation cannot name it. Rewrite the
+            # default to the store path of the CLI input instead; the
+            # `cli` backend then works without the executable on `$PATH`.
+            postPatch = ''
+              substituteInPlace bruvtab.el \
+                --replace-fail 'bruvtab-program "bruvtab"' \
+                  'bruvtab-program "${lib.getExe' bruvtab.packages.${system}.bruvtab "bruvtab"}"'
+            '';
 
-              # Install the package file only.  The ERT suite stays in the
-              # repository under `test/' and runs as its own check.
-              # `files' is spliced
-              # into a MELPA recipe as text, so it takes an Elisp list
-              # literal, not a Nix list.
-              files = ''("bruvtab.el")'';
-
-              # Point the default program at the store path of the CLI.
-              postPatch = ''
-                substituteInPlace bruvtab.el \
-                  --replace-fail 'bruvtab-program "bruvtab"' 'bruvtab-program "${lib.getExe' bruvtabCli "bruvtab"}"'
-              '';
-
-              # A byte-compile warning fails the build.  This is the
-              # cheapest lint the package gets, and it keeps the source
-              # warning-free.
-              turnCompilationWarningToError = true;
-
-              meta = {
-                description = "URL lookup for EXWM Firefox windows via bruvtab";
-                longDescription = ''
-                  bruvtab is glue between EXWM X11 windows and the bruvtab/brotab
-                  `--json' commands.  Given an EXWM buffer that is a Firefox window,
-                  it returns the URL of the active tab by joining the EXWM window
-                  title with bruvtab's active-tab list.  The default backend talks
-                  HTTP directly to the running bruvtab mediator; a `cli' backend
-                  shells out to the bruvtab executable instead.
-                '';
-                license = lib.licenses.agpl3Plus;
-                homepage = "https://github.com/nagy/emacs-bruvtab";
-                maintainers = with lib.maintainers; [ nagy ];
-                platforms = lib.platforms.linux;
-              };
-            }
-          ) { inherit version; };
-        in
-        {
-          packages = {
-            bruvtab = bruvtabEmacs;
-            default = config.packages.bruvtab;
-          };
-
-          checks = {
-            # melpaBuild byte-compiles with warnings as errors, so the
-            # package is the check.
-            default = bruvtabEmacs;
-            lint = pkgs.callPackage mkLint { inherit (bruvtabEmacs) src; };
-            tests = pkgs.callPackage mkTests { inherit (bruvtabEmacs) src; };
-          };
-
-          devShells.default = pkgs.mkShell {
-            packages = [
-              # The CLI under development, plus a real Emacs for
-              # interactive testing of the package.
-              bruvtab.packages.${system}.bruvtab
-              pkgs.emacs
-              config.treefmt.build.wrapper
-            ];
-          };
-
-          # nixfmt only.  Elisp has no formatter in this stack, so the
-          # sources stay untouched and checkdoc/package-lint guard style.
-          treefmt = {
-            projectRootFile = "flake.nix";
-            programs.nixfmt.enable = true;
+            # The CLI the `cli` backend drives, for interactive testing.
+            devShell.extraPackages = [ bruvtab.packages.${system}.bruvtab ];
           };
         };
     };

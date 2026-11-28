@@ -4,7 +4,8 @@
 
 Glue between EXWM X11 windows and the `bruvtab`/`brotab` `--json` commands.
 Goal: given an EXWM buffer that is a Firefox window, return the URL of its
-active tab. One source file, `bruvtab.el`. `flake.nix` packages it. `LICENSE` holds the AGPLv3
+active tab. One source file, `bruvtab.el`. `flake.nix` configures `nagy.emacs`
+from `github:nagy/common`. `LICENSE` holds the AGPLv3
 text. License: AGPL-3.0-or-later. Emacs 31.1 or newer.
 
 ## Layout
@@ -12,14 +13,18 @@ text. License: AGPL-3.0-or-later. Emacs 31.1 or newer.
 - `bruvtab.el` — the whole package: queries, window mapping, snapshot, native HTTP
   client, CLI fallback, commands.
 - `test/bruvtab-test.el` — ERT suite, 33 tests, no mediator and no X11 display.
-- `flake.nix` — flake-parts flake: package, lint check, ERT check, devShell,
-  treefmt.
+- `flake.nix` — `nagy.emacs` config of `github:nagy/common`, which supplies
+  `melpaBuild`, the ERT run, the lint gate, the devShell and treefmt.
 
 ## Build and test
 
-- `nix flake check` — the gate. Run before a commit.
-- `nix build` — the package.
+- `nix flake check` — the gate: `checks.bruvtab` (the package, whose `doCheck`
+  runs `test/*-test.el`), `checks.lint` and `checks.treefmt`. Run before a
+  commit.
+- `nix build` — the package only; `melpaBuild` still runs the ERT suite.
 - `nix fmt` — nixfmt through treefmt. Never format `flake.nix` by hand.
+- `nix develop` — Emacs and the `bruvtab` CLI. The CLI sits on `PATH` because
+  `nagy.emacs.devShell.extraPackages` carries it.
 - Direct run: `emacs --batch -L . -L test -l bruvtab.el test/bruvtab-test.el -f
   ert-run-tests-batch-and-exit`.
 - `M-x bruvtab-diagnose` — prints per-stage timings when a stall shows up.
@@ -29,38 +34,37 @@ text. License: AGPL-3.0-or-later. Emacs 31.1 or newer.
 
 ### Flake
 
-- `flake-parts` with `nixpkgs`, `treefmt-nix` and `bruvtab`
-  (`github:pschmitt/bruvtab`, with `nixpkgs` following ours) as inputs.
-  `nixpkgs` stays pinned to `nixos-unstable` in `flake.lock`.
-- The package is `pkgs.lib.makeOverridable`, inside `perSystem`. Arguments:
-  `emacs`, `emacsPackages`, `melpaBuild`, `bruvtabCli`, `src`, `version`. A
-  consumer overrides the Emacs, the CLI or the source:
-  `inputs.bruvtab.packages.${system}.bruvtab.override { emacs = pkgs.emacs-nox; }`.
-  `emacsPackages` defaults to `pkgs.emacsPackagesFor emacs`.
-- Name the local package attribute `bruvtabEmacs`, and bind the input package as
-  `bruvtabCli`. Nix `let` is recursive, so a local name equal to `bruvtab`
-  recurses against our own `packages.bruvtab`.
-- `checks.default` is the package byte-compile gate. `checks.lint` is a
-  `runCommandLocal` (`mkLint`) over `bruvtab.el` and `test/*-test.el`, which fails on
-  any package-lint or checkdoc output. `package-lint-main-file` is set, because
-  without it package-lint treats each test file as its own package. Keep lint out
-  of the package, so a style finding never blocks a buildable package.
-- `checks.tests` (`mkTests`) copies the source tree and runs the ERT suite. A
-  `failglob` `printf` over `test/*-test.el` builds the `-l <file>` pairs, so a new
-  test file needs no flake edit.
-- The package sets `files = ''("bruvtab.el")''`, a MELPA recipe property spliced
-  as Elisp text. It keeps the test tree out of the installed package.
-- `version` derives from `self.lastModifiedDate` as
-  `0.1.0-unstable-<YYYY-MM-DD>`, with the epoch fallback `19700101` when the
-  source is not a git checkout. The flake computes it in a top-level `let` and
-  passes it to `makeOverridable`, because a plain import cannot know it.
-- `postPatch` rewrites the `bruvtab-program` default to the store path of the
-  bruvtab executable through `lib.getExe' bruvtabCli "bruvtab"`. The upstream
-  flake carries no `meta.mainProgram`, and plain `lib.getExe` emits a deprecation
-  warning. Keep the `${bruvtabCli}` expression inside the `''...''` string as an
-  interpolation.
-- The builder gets `pkgs.writableTmpDirAsHomeHook`, which gives Emacs and
-  package-lint a writable `$HOME`. Do not set `HOME=$TMPDIR` by hand.
+- `flake-parts` with `nixpkgs`, `treefmt-nix`, `common` (`github:nagy/common`)
+  and `bruvtab` (`github:pschmitt/bruvtab`, with `nixpkgs` following ours) as
+  inputs. `nixpkgs` stays pinned to `nixos-unstable` in `flake.lock`. Only
+  `x86_64-linux` is evaluated.
+- `common.flakeModules.emacs` does the build, the ERT run, the lint check and
+  the devShell; `common.flakeModules.treefmt` supplies `treefmt` with
+  `nixfmt`, `rustfmt` and `taplo` enabled, so a `.rs` or `.toml` file added
+  here is formatted by the house settings rather than this repo's. The flake
+  itself states nothing about the package: keep it a `nagy.emacs` block, so
+  version, description, licence, homepage and maintainer exist once, in the
+  header of `bruvtab.el`.
+- `nagy.emacs.name` is `bruvtab` and must match the file name and the
+  `;;; bruvtab.el --- ...` header, or `require` breaks after installation.
+- The header owns `Version:` (plus `-unstable-<YYYY-MM-DD>` from the consumer's
+  last commit), the summary line as the description, `URL:` as the homepage,
+  `SPDX-License-Identifier: AGPL-3.0-or-later` and `Maintainer:` as the
+  maintainer, resolved through its email. A field that is missing or wrong
+  stops evaluation rather than shipping a package without it.
+- `packages.bruvtab` is overridable at its `melpaBuild` leaf only:
+  `inputs.<this>.packages.${system}.bruvtab.override { emacs = pkgs.emacs-nox; }`.
+  `src`, `version`, `meta` and the patches are read from `cfg.src` at evaluation
+  time, so they are options here, not override arguments.
+- `bruvtab-program` gets no `;; NIX-EMACS-PROGRAM:` annotation, because that
+  annotation names a nixpkgs attribute and `bruvtab` is not in nixpkgs.
+  `nagy.emacs.postPatch` rewrites the defcustom default to
+  `lib.getExe' bruvtab.packages.${system}.bruvtab "bruvtab"` instead; the
+  upstream flake carries no `meta.mainProgram`, so the binary is named
+  explicitly, and `--replace-fail` stops the build when the defcustom moves.
+- The ERT suite runs from `test/`, which the part copies back from the source
+  tree: MELPA `files` specs never descend into subdirectories, so the tests stay
+  out of the installed package without a `files` list.
 
 ## Architecture
 
@@ -206,6 +210,11 @@ HTTP/1.0 client (`bruvtab--native-fetch`) that GETs `/list_tabs` +
   built on it must append a final `t` to return boolean truth.
 - `call-process` stdout+stderr into a temp buffer: destination `(list t t)`.
 - `hash-table-values`/`hash-table-keys` need `(require 'subr-x)`.
+- checkdoc runs with `checkdoc-arguments-in-order-flag`, so a docstring must
+  name its arguments in the order of the parameter list, each as the
+  upper-case symbol (`PATH`, `BODY`), and its first line must be a full
+  sentence ending in a period. A macro's `&rest body` still has to be named
+  `BODY`.
 - Pure helpers carry `(declare (pure t) (side-effect-free t))`:
   `bruvtab--window-id-of` and `bruvtab--window-ids-from-tabs`. A
   function that calls `string-match` does not qualify, because that sets
@@ -252,7 +261,8 @@ HTTP/1.0 client (`bruvtab--native-fetch`) that GETs `/list_tabs` +
 `test/` (singular), one file per source file, named `<unit>-test.el`.
 Shared helpers go in `<name>-test-helper.el`, so the `test/*-test.el`
 glob stays a test-only list. Run the suite with `nix flake check` (it
-builds `checks.<system>.tests`) or directly:
+builds `checks.<system>.bruvtab`, the package whose `doCheck` runs it) or
+directly:
 
 ```sh
 emacs --batch -L . -L test -l bruvtab.el test/bruvtab-test.el \
@@ -279,7 +289,7 @@ tab data.
 | Dependency | Required? | Why |
 |---|---|---|
 | Emacs 31.1 | required | package-lint accepts the `rx` `any` set operator from that version on. |
-| `bruvtab` CLI (`github:pschmitt/bruvtab`) | required | The `cli` backend shells out to `bruvtab-program`. The flake patches the default path. |
+| `bruvtab` CLI (`github:pschmitt/bruvtab`) | required | The `cli` backend shells out to `bruvtab-program`. `nagy.emacs.postPatch` patches the default path. |
 | EXWM | required at runtime | Reads the buffer-local `exwm--*` variables. |
 | `subr-x` | required | `hash-table-values` and `hash-table-keys`. |
 

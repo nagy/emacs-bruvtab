@@ -20,6 +20,21 @@
         "type": "github"
       }
     },
+    "common": {
+      "locked": {
+        "lastModified": 1795896529,
+        "narHash": "sha256-g7u54v53N4rpp0g3kL1GQqJWNJr0shJuaii/DdT9IAg=",
+        "owner": "nagy",
+        "repo": "common",
+        "rev": "2712e824cfe4155e6fecfa53bb0d2c57be251a96",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nagy",
+        "repo": "common",
+        "type": "github"
+      }
+    },
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": "nixpkgs-lib"
@@ -72,6 +87,7 @@
     "root": {
       "inputs": {
         "bruvtab": "bruvtab",
+        "common": "common",
         "flake-parts": "flake-parts",
         "nixpkgs": "nixpkgs",
         "treefmt-nix": "treefmt-nix"

@@ -47,9 +47,9 @@
           :tabs-by-id by-id :title->id title->id)))
 
 (defmacro bruvtab-test--with-firefox-buffer (title &rest body)
-  "Run BODY in a temporary buffer that looks like a Firefox EXWM window.
-TITLE becomes the buffer's `exwm-title'.  The buffer has a live
-`exwm--id', so `bruvtab-firefox-buffer-p' accepts it."
+  "TITLE becomes the `exwm-title' of a fake Firefox window buffer.
+BODY runs inside it.  The buffer has a live `exwm--id', so
+`bruvtab-firefox-buffer-p' accepts it."
   (declare (indent 1) (debug t))
   `(let ((buf (generate-new-buffer " *bruvtab-test*")))
      (unwind-protect
